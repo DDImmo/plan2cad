@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plan2cad"
+version = "0.1.0"
+description = "Scan de plan (A0...) -> DXF multi-calques calés -> 3D optionnel, en ligne de commande."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "opencv-python-headless",
+    "scikit-image",
+    "scipy",
+    "pillow",
+]
+
+[project.optional-dependencies]
+pdf = ["pymupdf"]
+
+[project.scripts]
+plan2cad = "plan2cad.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["plan2cad*"]
+
+[tool.setuptools.package-data]
+plan2cad = ["static/*"]

@@ -1,0 +1,6 @@
+data/*
+.venv
+pdfocr_runs/*
+tests/*
+mes_plans/*
+sortie/*

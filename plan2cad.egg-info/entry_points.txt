@@ -1,0 +1,2 @@
+[console_scripts]
+plan2cad = plan2cad.cli:main

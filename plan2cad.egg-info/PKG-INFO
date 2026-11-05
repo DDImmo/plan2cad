@@ -1,0 +1,146 @@
+Metadata-Version: 2.4
+Name: plan2cad
+Version: 0.1.0
+Summary: Scan de plan (A0...) -> DXF multi-calques calés -> 3D optionnel, en ligne de commande.
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: opencv-python-headless
+Requires-Dist: scikit-image
+Requires-Dist: scipy
+Requires-Dist: pillow
+Provides-Extra: pdf
+Requires-Dist: pymupdf; extra == "pdf"
+
+# plan2cad
+
+Scan de plan (A0…) → **DXF multi-calques calés** → **3D optionnelle**, en une commande, 100 % Python, sans étape manuelle.
+
+| Étape du mode opératoire | Avant (manuel) | Maintenant (automatique) |
+|---|---|---|
+| Nettoyage du scan | GIMP : seuillage, retrait des taches | aplatissement du fond, seuil d'Otsu, suppression des poussières / textes |
+| Vectorisation | VTracer / WinTopo (lignes centrales) | squelette + graphe + fusion des tronçons alignés + Douglas-Peucker |
+| Calques & couleurs | à la main dans QCAD | charte `ARC-… / ELEC-… / PLUMB-… / CVC-…`, couleurs forcées |
+| Calage (ALIGNER) | 2 points à cliquer | Fourier-Mellin + ICP automatique, ou 2 points d'ancrage dans un fichier |
+| Repères pour l'architecte | à dessiner | calque `Z-POINTS-ANCRAGE` : 2 croix, générées |
+| Passage en 3D | extrusion dans FreeCAD | `--3d` : OBJ, STL, DXF 3DFACE, visionneuse web |
+
+## Installation
+
+```bash
+cd plan2cad
+pip install .            # ou : pipx install .   (commande `plan2cad` disponible partout)
+pip install pymupdf      # optionnel : lecture PDF sans poppler
+```
+Dépendances : numpy, opencv-python-headless, scikit-image, scipy, pillow. Les PDF sont lus par `pdftoppm` (poppler-utils) ou PyMuPDF. Le DXF est écrit/lu par un module interne : pas de dépendance à `ezdxf`.
+
+## Essayer tout de suite
+
+```bash
+plan2cad demo -o essai --3d --serve      # scans fictifs bruités, chaîne complète, interface web
+```
+
+## Utilisation
+
+```bash
+# chaîne complète : un scan par lot, calés sur l'architecture
+plan2cad run --arc archi.tif --elec elec.tif --plumb plomberie.pdf -o sortie --scale 100 --dpi 400
+
+# avec la 3D (optionnelle) et l'interface web pendant le traitement
+plan2cad run --arc archi.tif --elec elec.tif -o sortie --3d --serve
+
+# traitement par lots : un DXF par scan
+plan2cad vectorize scans/*.tif --lot arc -o dxf/ --remove-text
+
+# 3D à partir d'un DXF 2D déjà existant
+plan2cad extrude plan.dxf --wall-height 2700
+
+# rouvrir l'interface web sur des résultats existants
+plan2cad serve sortie/
+
+plan2cad layers        # charte de calques
+```
+Entrées acceptées : PNG, TIFF (1 bit OK), JPEG, PDF (page 1), DXF.
+Sorties dans le dossier : `<nom>.dxf` (tous lots), `<nom>_ARC.dxf`, `_ELEC.dxf`, `_PLUMB.dxf`…, `<nom>.svg`, `steps/*.png`, `run.json`, et avec `--3d` : `_3d.obj/.stl/.dxf`, `model3d.json`.
+
+Unités : **mm réels**. `--scale 100` = plan au 1:100 (défaut). `--dpi` = résolution du scan (défaut 400).
+
+### Interface web
+`--serve` (ou `plan2cad serve DOSSIER`) ouvre <http://127.0.0.1:8765> :
+* **Étapes** : chaque étape avec durée, statistiques et image (scan → fond corrigé → binaire → nettoyé → squelette → vecteurs), zoom plein écran ; mise à jour en direct pendant le calcul.
+* **Plans** : le DXF final par calques (cases à cocher), zoom / déplacement.
+* **3D** : vue orbitable, calques activables (onglet présent seulement avec `--3d`).
+* **Fichiers** : téléchargements.
+
+### Fichier projet (plusieurs niveaux, points d'ancrage manuels)
+```json
+{
+  "name": "immeuble",
+  "levels": [
+    {"name": "RDC", "z": 0, "height": 2700,
+     "files": {"arc": "rdc_archi.tif", "elec": "rdc_elec.tif"},
+     "anchors": {"elec": {"src": [[812, 4410], [17630, 12020]],
+                          "dst": [[640, 4390], [17420, 12010]]}}},
+    {"name": "R+1", "z": 2700, "height": 2600,
+     "files": {"arc": "r1_archi.tif", "elec": "r1_elec.tif"}}
+  ]
+}
+```
+`anchors` : coordonnées **en pixels de l'image d'origine** (deux points du scan du lot → les mêmes points sur le scan d'architecture). Sans `anchors`, le calage est automatique. Les niveaux sont calés entre eux automatiquement et empilés en 3D.
+
+## Dossier de plans quelconque (scan → manifeste → build)
+
+Couleur ou noir & blanc, un dossier par bâtiment ou par lot, une planche = 1 plan ou 4-5 plans : donnez le tout.
+
+```bash
+plan2cad scan  mes_plans/ -o sortie        # inventaire + manifest.json (à relire, corriger)
+plan2cad build sortie/manifest.json -o res # un dossier de résultats par bâtiment (DXF par niveau)
+plan2cad auto  mes_plans/ -o sortie        # les deux d'un coup
+plan2cad serve sortie                      # onglet « Inventaire » : arborescence, confiance, vignettes annotées
+```
+
+Ce que fait `scan` : retire le cadre de planche, découpe la planche en plans (les textes ne font pas pont), ignore
+cartouches et doublons, lit bâtiment / niveau / lot dans les noms de fichiers et dossiers, sinon les déduit du dessin
+(murs pleins ou double trait = architecture ; couleurs = lots ; plans N&B sans indice = lot « autre »), regroupe les plans
+d'architecture à emprise identique en un bâtiment (niveaux = plans successifs), puis rattache chaque plan de lot à
+l'architecture dont la géométrie coïncide. Chaque décision porte une **confiance** et ses **raisons** dans le manifeste ;
+rien n'est silencieux. Modifiez `building`, `level`, `lot`, `skip` à la main puis relancez `build`.
+
+Limites : un lot en N&B sans nom ni couleur reste « autre » ; deux bâtiments aux emprises quasi identiques et sans nom
+peuvent être confondus (signalé par une confiance faible).
+
+## Réglages utiles
+| Option | Rôle |
+|---|---|
+| `--max-px 7000` | côté de travail max ; un A0 à 400 dpi (18 700 px) est réduit (≈ 17 mm réels / pixel à 1:100). Monter à 10000-12000 pour plus de précision (≈ 3 Go de RAM). |
+| `--remove-text [lot…]` | supprime les petits éléments type texte (≤ `--text-mm`). Retire aussi les petits symboles : à réserver à l'architecture. |
+| `--deskew` | redresse un scan penché (±3°). |
+| `--threshold N` | seuil noir/blanc manuel si l'automatique rate des traits pâles. |
+| `--simplify / --min-length / --prune` | tolérances (mm papier) de simplification, longueur min, épines. |
+| `--strip-backdrop [MM]` | retire des lots le fond d'architecture qui recouvre le plan maître. |
+| `--align none` | pas de calage. |
+| `--3d --wall-height 2700 --wall-thickness 200 --elev elec=2400,plumb=300` | paramètres 3D. |
+
+## Limites connues (à connaître avant de s'y fier)
+* **Textes (OCR)** : lus avec Tesseract s'il est installé (`apt install tesseract-ocr tesseract-ocr-fra` ; sans lui, tout marche mais le texte n'est pas lu, message dans le journal). Méthode : l'outil isole lui-même les blocs de texte (lettres regroupées par taille et alignement), puis lit chaque bloc en horizontal, de bas en haut et de haut en bas, avec agrandissement automatique du petit texte (≥ 0,55 mm papier de haut). Il sert à : identifier le lot d'un plan sans nom (« ÉLECTRICITÉ », « PLOMBERIE », « CHAUFFAGE », « GAZ »…), lire le niveau (« PLAN NIVEAU 1 », « RDC », « R+2 »), reconnaître les noms de pièces. Les textes sont écrits en objets TEXTE (avec leur angle) sur `ARC-TEXTE` / `ELEC-TEXTE` / `PLUMB-TEXTE`…, les lectures douteuses (confiance < 70 %) sur `Z-TEXTE-INCERTAIN` ; les lettres sont retirées du tracé. **Écriture manuscrite : non lue** (Tesseract n'en est pas capable ; elle donne des lectures de faible confiance, classées « incertain », ou rien). Texte oblique (ni 0° ni 90°) : non lu. `--no-ocr` pour désactiver.
+* **Cotes** : un nombre (« 8.26 », « 350 », « 3,50 m ») est relié à la ligne droite parallèle la plus proche, qui passe sur `ARC-COTES` avec son texte. Les longueurs écrites et dessinées donnent l'échelle réelle du plan : si ≥ 3 cotes concordent à ±6 %, l'outil **avertit quand elle diffère de `--scale`** (une mauvaise échelle fausse toutes les dimensions et la 3D), et `--scale auto` l'applique. Limites : une cote dont le texte coupe la ligne en deux, des chaînes de cotes sur une même ligne, ou des cotes d'autre nature (altimétrie, angles) ne sont pas exploitées ; la valeur n'est pas comparée trait par trait à la géométrie.
+* **Portes, fenêtres, escaliers** (`--no-openings` pour désactiver). Ouverture = deux tronçons de mur alignés séparés de 0,5 à 3 m : porte si un arc de battant OU un battant seul part d'un montant, fenêtre si des traits fins la traversent, sinon baie ouverte (classée `ARC-PORTE`). **Double trait** : les fenêtres dessinées sans interrompre le mur (2-3 traits dans son épaisseur sur 0,4 à 3 m) sont reconnues et le mur est coupé à leur droit ; les escaliers ne sont plus noyés par le comblement des doubles traits (on ne comble que les bandes de largeur constante entre deux traits de mur). Escaliers : ≥ 4 traits parallèles de même longueur espacés de 17 à 42 cm, ou ≥ 5 marches **en éventail** (traits dont les prolongements passent par un même centre, régulièrement répartis en angle). Battants, arcs, traits de fenêtre et marches vont sur `ARC-PORTE` / `ARC-FENETRE` / `ARC-ESCALIER`, plus un repère en travers de chaque ouverture et l'emprise de chaque escalier. En 3D : porte = panneau + linteau, fenêtre = allège + vitrage + linteau, escalier non modélisé. **Non reconnus** : portes coulissantes sans symbole, portes doubles dessinées sans battant, fenêtres sans aucun trait intérieur, escaliers dont les marches ne sont pas des traits droits (marches courbes), escaliers dessinés par arcs concentriques seuls, symboles sur plans scannés très dégradés. Tout est reclassé, rien n'est supprimé (sauf le mur coupé au droit d'une fenêtre en double trait).
+* Tout le reste du gros œuvre va dans `ARC-MURS-*` ; la séparation EXT / INT se fait par épaisseur de trait, seulement si la distribution est nettement bimodale, sinon tout est `ARC-MURS-INT`. Les lots réseaux n'ont qu'un calque par lot (`ELEC-COURANT-FORT`, `PLUMB-EAU-POTABLE`, `CVC-VENTIL`) : reventilation à faire ensuite.
+* **Murs en double trait** : chaque trait est vectorisé séparément (on ne reconstitue pas la ligne centrale du mur). L'extrusion 3D donne alors des voiles minces le long de chaque trait. Elle est fidèle pour les murs pleins (poché noir). Les ouvertures détectées sont découpées (porte, fenêtre) uniquement pour les murs pleins.
+* **Calage automatique** : il faut de la géométrie commune avec l'architecture (les murs en fond des plans de lots suffisent). Un plan de réseau nu, sans fond, se cale mal : un avertissement s'affiche (`inlier_ratio` bas), utiliser alors les points d'ancrage.
+* **Fond d'architecture dupliqué** dans les lots : signalé (`recouvrement_plan_maitre`). `--strip-backdrop` le retire, mais retire aussi les réseaux posés le long des murs (tolérance 60 mm par défaut).
+* Réseaux 3D : tracés à altitude constante, sans colonnes montantes.
+* DXF produit en **R12 ASCII**, validé par un vérificateur structurel et une relecture interne ; **non essayé dans AutoCAD / FreeCAD / QCAD** lors du développement : ouvrir un premier fichier dans votre logiciel avant de l'industrialiser.
+
+## Tests
+```bash
+python -m unittest discover -s tests -v
+```
+
+## Mises à jour récentes
+
+- **Échelle** : `--scale 100`, `1:48`, `1/4"=1'` ou `auto` (déduite des cotes métriques/impériales, ou des dimensions de pièces lues). Si rien n'est lisible, `--known-length 17.4` / `57ft` / `57'6"` cale le plus grand côté du bâtiment puis s'aligne sur l'échelle standard si l'écart est < 3 %.
+- **Ouvertures** : une brèche nue dans la façade devient une fenêtre (confiance 0,5, « à vérifier ») ; escaliers à arcs concentriques et en éventail détectés ; portes coulissantes/doubles sans symbole classées « ouverture ».
+- **Calques** : `Z-TEXTE-NON-LU` (blobs de lettres illisibles), `Z-TEXTE-INCERTAIN` (OCR < 70).
+- **Inventaire** : découpe XY-cut (bande blanche ≥ 7 mm), type « illustration » (croquis ignorés).
+- **Limites réelles** (scan de catalogue ancien) : écriture manuscrite non lue ; croquis et plan sans bande blanche restent fusionnés (recadrer dans le manifest) ; escaliers à marches très courtes non détectés ; OCR pleine page lent (12–22 s).

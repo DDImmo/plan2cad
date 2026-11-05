@@ -1,0 +1,8 @@
+numpy
+opencv-python-headless
+scikit-image
+scipy
+pillow
+
+[pdf]
+pymupdf

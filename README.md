@@ -160,3 +160,16 @@ Les lettres manuscrites (capitales d'architecte) ne sont pas fiables à lire aut
 2. remplir le champ `texte` de chaque ligne dans le JSON ;
 3. relancer avec `--texts <plan>_a_relire.json` : les textes sont posés à l'emplacement des lettres et les lettres disparaissent du dessin.
 Les identifiants restent stables tant que les mêmes options sont utilisées.
+
+
+## Arcs et cercles vrais (ajustement de primitives)
+
+Les cercles et arcs nets (arcs de battant, murs courbes, poteaux ronds) sont ajustés sur les **pixels bruts du squelette**
+(centaines de points : précision sous-pixel) puis écrits en vraies entités DXF `ARC` / `CIRCLE`, au lieu d'une polyligne à
+facettes. Ils ne sont plus aplatis par la régularisation H/V. Un garde-fou refuse les faux positifs (cloisons droites bruitées,
+coins de rectangle, tronçons trop courts ou trop plats).
+
+Mesure sur un plan synthétique à géométrie connue (`python tests/bench_fidelity.py`) : écart moyen ≈ 0,08 mm papier inchangé,
+précision 0,121 → 0,108 mm, sommets 100 → 44, entités `ARC`/`CIRCLE` 0 → 3 / 1. Tests : `python -m unittest tests.test_fit`.
+Limites : arcs ajustés seulement sur les branches simples du squelette ; un arc fusionné avec un trait droit avant ajustement est
+repris par un ajustement sur sommets (moins précis) ; pas encore ouvert dans AutoCAD / QCAD (seul le relecteur interne a validé).

@@ -1,7 +1,7 @@
 """Lecteur / écrivain DXF minimal, sans dépendance (ASCII, format R12 = AC1009).
 
 Le R12 est lu par FreeCAD, QCAD, AutoCAD, LibreCAD, BricsCAD, etc.
-Entités écrites : POLYLINE, LINE, POINT, TEXT, 3DFACE.
+Entités écrites : POLYLINE, LINE, POINT, TEXT, 3DFACE, ARC, CIRCLE.
 Entités lues : LINE, POLYLINE/VERTEX, LWPOLYLINE, POINT, CIRCLE, ARC.
 """
 from __future__ import annotations
@@ -77,6 +77,16 @@ def write_dxf(path, entities, layer_colors: dict[str, int]):
             g(40, _f(hgt)); g(1, txt)
             if len(e) > 5 and abs(float(e[5])) > 1e-6:
                 g(50, _f(e[5]))
+        elif kind == "arc":
+            # ("arc", layer, (cx, cy), r, a0_deg, a1_deg) : sens anti-horaire
+            c = e[2]
+            g(0, "ARC"); g(8, layer)
+            g(10, _f(c[0])); g(20, _f(c[1])); g(30, "0.0")
+            g(40, _f(e[3])); g(50, _f(e[4])); g(51, _f(e[5]))
+        elif kind == "circle":
+            c = e[2]
+            g(0, "CIRCLE"); g(8, layer)
+            g(10, _f(c[0])); g(20, _f(c[1])); g(30, "0.0"); g(40, _f(e[3]))
         elif kind == "face":
             pts = np.asarray(e[2], dtype=float)
             if len(pts) == 3:

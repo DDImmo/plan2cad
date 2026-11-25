@@ -987,8 +987,13 @@ def anchor_crosses(master: list[Poly]) -> list[Poly]:
     return out
 
 
-def polys_to_entities(polys: list[Poly], texts: list | None = None):
-    ents = [("polyline", p.layer, p.pts, p.closed) for p in polys]
+def polys_to_entities(polys: list[Poly], texts: list | None = None, fit_arcs: bool = True):
+    """fit_arcs : les suites de sommets qui suivent un cercle deviennent de vrais ARC / CERCLE."""
+    if fit_arcs:
+        from .fit import to_entities
+        ents, _, _ = to_entities(polys, tol_abs=0.0)
+    else:
+        ents = [("polyline", p.layer, p.pts, p.closed) for p in polys]
     ents += [("text", t.layer, t.pos, t.height, t.s, t.angle) for t in (texts or [])]
     return ents
 

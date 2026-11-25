@@ -174,7 +174,16 @@ def build_polylines(branches, jcent, prune_px: float, eps_px: float, min_len_px:
     branches = keep
 
     # 3. simplification de chaque branche (extrémités = nœuds conservées)
+    #    cercles et arcs nets : ajustés sur les pixels bruts (précision sous-pixel) avant toute simplification
+    from .fit import refit_chain
     for b in branches:
+        rc = refit_chain(b["pts"], b["closed"])
+        if rc is not None:
+            b["pts"] = rc
+            b["fitted"] = True
+    for b in branches:
+        if b.get("fitted"):
+            continue
         p = b["pts"].astype(np.float32).reshape(-1, 1, 2)
         if len(p) >= 3:
             s = cv2.approxPolyDP(p, eps_px, b["closed"]).reshape(-1, 2).astype(np.float64)

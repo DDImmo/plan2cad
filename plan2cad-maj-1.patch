@@ -1,0 +1,594 @@
+From 77d457e673982023067a37ca07af29f64c18e930 Mon Sep 17 00:00:00 2001
+From: plan2cad-dev <dev@example.invalid>
+Date: Mon, 23 Nov 2026 21:46:39 +0100
+Subject: [PATCH] Ajustement d'arcs et de cercles vrais (ARC/CIRCLE DXF) sur
+ les pixels bruts du squelette
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_011rQ3TXCJHy8ThjcS1baE6r
+---
+ README.md               |  13 +++
+ plan2cad/dxf.py         |  12 ++-
+ plan2cad/fit.py         | 197 ++++++++++++++++++++++++++++++++++++++++
+ plan2cad/pipeline.py    |   9 +-
+ plan2cad/regularize.py  |   6 ++
+ plan2cad/vectorize.py   |   9 ++
+ tests/bench_fidelity.py | 180 ++++++++++++++++++++++++++++++++++++
+ tests/test_fit.py       |  52 +++++++++++
+ 8 files changed, 475 insertions(+), 3 deletions(-)
+ create mode 100644 plan2cad/fit.py
+ create mode 100644 tests/bench_fidelity.py
+ create mode 100644 tests/test_fit.py
+
+diff --git a/README.md b/README.md
+index 954ec50..9b7d36c 100644
+--- a/README.md
++++ b/README.md
+@@ -160,3 +160,16 @@ Les lettres manuscrites (capitales d'architecte) ne sont pas fiables à lire aut
+ 2. remplir le champ `texte` de chaque ligne dans le JSON ;
+ 3. relancer avec `--texts <plan>_a_relire.json` : les textes sont posés à l'emplacement des lettres et les lettres disparaissent du dessin.
+ Les identifiants restent stables tant que les mêmes options sont utilisées.
++
++
++## Arcs et cercles vrais (ajustement de primitives)
++
++Les cercles et arcs nets (arcs de battant, murs courbes, poteaux ronds) sont ajustés sur les **pixels bruts du squelette**
++(centaines de points : précision sous-pixel) puis écrits en vraies entités DXF `ARC` / `CIRCLE`, au lieu d'une polyligne à
++facettes. Ils ne sont plus aplatis par la régularisation H/V. Un garde-fou refuse les faux positifs (cloisons droites bruitées,
++coins de rectangle, tronçons trop courts ou trop plats).
++
++Mesure sur un plan synthétique à géométrie connue (`python tests/bench_fidelity.py`) : écart moyen ≈ 0,08 mm papier inchangé,
++précision 0,121 → 0,108 mm, sommets 100 → 44, entités `ARC`/`CIRCLE` 0 → 3 / 1. Tests : `python -m unittest tests.test_fit`.
++Limites : arcs ajustés seulement sur les branches simples du squelette ; un arc fusionné avec un trait droit avant ajustement est
++repris par un ajustement sur sommets (moins précis) ; pas encore ouvert dans AutoCAD / QCAD (seul le relecteur interne a validé).
+diff --git a/plan2cad/dxf.py b/plan2cad/dxf.py
+index d8c7e38..46c789e 100644
+--- a/plan2cad/dxf.py
++++ b/plan2cad/dxf.py
+@@ -1,7 +1,7 @@
+ """Lecteur / écrivain DXF minimal, sans dépendance (ASCII, format R12 = AC1009).
+ 
+ Le R12 est lu par FreeCAD, QCAD, AutoCAD, LibreCAD, BricsCAD, etc.
+-Entités écrites : POLYLINE, LINE, POINT, TEXT, 3DFACE.
++Entités écrites : POLYLINE, LINE, POINT, TEXT, 3DFACE, ARC, CIRCLE.
+ Entités lues : LINE, POLYLINE/VERTEX, LWPOLYLINE, POINT, CIRCLE, ARC.
+ """
+ from __future__ import annotations
+@@ -77,6 +77,16 @@ def write_dxf(path, entities, layer_colors: dict[str, int]):
+             g(40, _f(hgt)); g(1, txt)
+             if len(e) > 5 and abs(float(e[5])) > 1e-6:
+                 g(50, _f(e[5]))
++        elif kind == "arc":
++            # ("arc", layer, (cx, cy), r, a0_deg, a1_deg) : sens anti-horaire
++            c = e[2]
++            g(0, "ARC"); g(8, layer)
++            g(10, _f(c[0])); g(20, _f(c[1])); g(30, "0.0")
++            g(40, _f(e[3])); g(50, _f(e[4])); g(51, _f(e[5]))
++        elif kind == "circle":
++            c = e[2]
++            g(0, "CIRCLE"); g(8, layer)
++            g(10, _f(c[0])); g(20, _f(c[1])); g(30, "0.0"); g(40, _f(e[3]))
+         elif kind == "face":
+             pts = np.asarray(e[2], dtype=float)
+             if len(pts) == 3:
+diff --git a/plan2cad/fit.py b/plan2cad/fit.py
+new file mode 100644
+index 0000000..3b83f63
+--- /dev/null
++++ b/plan2cad/fit.py
+@@ -0,0 +1,197 @@
++"""Ajustement de primitives CAO : cercles et arcs vrais à la place des polylignes à facettes.
++
++Idée reprise de raster2cad (primitives CAO : lignes, cercles) et de vectorizer.ai (on ajuste des formes entières,
++cercles / arcs, plutôt que de décrire un contour point par point) : une suite de sommets qui suit un cercle devient
++UN objet ARC (ou CERCLE si la polyligne se ferme), les segments droits qui l'entourent restent des polylignes.
++Les arcs de porte, murs courbes et poteaux ronds restent ainsi éditables dans le logiciel de CAO.
++"""
++from __future__ import annotations
++
++import numpy as np
++
++MIN_VERTS = 4            # un arc ajusté sur moins de 4 sommets n'est pas fiable
++MIN_SWEEP = 20.0         # degrés
++MAX_REL_RMS = 0.02       # écart quadratique moyen / rayon
++MAX_TURN_DEG = 40.0      # virage maximal à un sommet d'arc
++
++
++def fit_circle(P: np.ndarray):
++    """Cercle des moindres carrés (Kåsa) : (cx, cy, r, rms) ou None."""
++    x, y = P[:, 0], P[:, 1]
++    A = np.c_[2 * x, 2 * y, np.ones(len(P))]
++    try:
++        sol = np.linalg.lstsq(A, x * x + y * y, rcond=None)[0]
++    except np.linalg.LinAlgError:
++        return None
++    cx, cy = float(sol[0]), float(sol[1])
++    r2 = sol[2] + cx * cx + cy * cy
++    if r2 <= 0:
++        return None
++    r = float(np.sqrt(r2))
++    rms = float(np.sqrt(np.mean((np.hypot(x - cx, y - cy) - r) ** 2)))
++    return cx, cy, r, rms
++
++
++def _turn_signs(P):
++    d = np.diff(P, axis=0)
++    cr = d[:-1, 0] * d[1:, 1] - d[:-1, 1] * d[1:, 0]
++    return np.sign(cr)
++
++
++def _good(P, tol_abs):
++    """Cercle plausible pour ce groupe de sommets ? Renvoie le cercle ou None."""
++    if len(P) < MIN_VERTS:
++        return None
++    s = _turn_signs(P)
++    s = s[s != 0]
++    if len(s) < len(P) - 2 or not (np.all(s > 0) or np.all(s < 0)):      # un arc tourne toujours du même côté
++        return None
++    # virage par sommet : un arc échantillonné tourne peu à chaque sommet ; 4 coins d'un rectangle sont cocycliques
++    d = np.diff(P, axis=0)
++    ang = np.arctan2(d[:, 1], d[:, 0])
++    turn = np.abs((np.diff(ang) + np.pi) % (2 * np.pi) - np.pi)
++    if len(turn) and turn.max() > np.radians(MAX_TURN_DEG):
++        return None
++    c = fit_circle(P)
++    if c is None:
++        return None
++    cx, cy, r, rms = c
++    if rms > max(MAX_REL_RMS * r, tol_abs):
++        return None
++    # le cercle ajusté doit rester près de CHAQUE corde (pas seulement des sommets) : flèche réelle = flèche de l'arc
++    mid = (P[:-1] + P[1:]) / 2
++    if np.abs(np.hypot(mid[:, 0] - cx, mid[:, 1] - cy) - r).max() > 0.12 * r:
++        return None
++    if np.hypot(*(P[-1] - P[0])) > 2 * r * 1.0001:
++        return None
++    # pas de côtés démesurés : sur un arc, les cordes successives sont du même ordre
++    L = np.hypot(*np.diff(P, axis=0).T)
++    if L.max() > 3.5 * np.median(L) + 1e-9 and len(L) > 3:
++        return None
++    return c
++
++
++def _angles(P, c):
++    cx, cy, r, _ = c
++    a = np.unwrap(np.arctan2(P[:, 1] - cy, P[:, 0] - cx))
++    return a
++
++
++def fit_polyline(pts: np.ndarray, closed: bool, tol_abs: float):
++    """Découpe une polyligne en morceaux : [("poly", pts) | ("arc", cx, cy, r, a0_deg, a1_deg) | ("circle", cx, cy, r)].
++    tol_abs : écart toléré (unités du dessin) sous lequel un ajustement est accepté même si rms > 2 % du rayon."""
++    P = np.asarray(pts, float)
++    n = len(P)
++    if closed and n >= 6:
++        c = _good(np.vstack([P, P[:1]]) if False else P, tol_abs)
++        if c is not None:
++            a = _angles(np.vstack([P, P[:1]]), c)
++            if abs(a[-1] - a[0]) > np.radians(330) and abs(abs(a[-1] - a[0]) - 2 * np.pi) < np.radians(40):
++                return [("circle", c[0], c[1], c[2])]
++    if n < MIN_VERTS:
++        return [("poly", P)]
++    pieces = []
++    i = 0
++    last_end = 0
++    while i <= n - MIN_VERTS:
++        j = i + MIN_VERTS
++        c = _good(P[i:j], tol_abs)
++        if c is None:
++            i += 1
++            continue
++        best = (j, c)
++        while j < n:
++            c2 = _good(P[i:j + 1], tol_abs)
++            if c2 is None:
++                break
++            j += 1
++            best = (j, c2)
++        j, c = best
++        a = _angles(P[i:j], c)
++        sweep = abs(np.degrees(a[-1] - a[0]))
++        if sweep < MIN_SWEEP or sweep > 350:
++            i += 1
++            continue
++        if i > last_end:
++            pieces.append(("poly", P[last_end:i + 1]))
++        cx, cy, r, _ = c
++        a0, a1 = np.degrees(a[0]), np.degrees(a[-1])
++        if a1 < a0:                                    # DXF : toujours dans le sens anti-horaire
++            a0, a1 = a1, a0
++        pieces.append(("arc", cx, cy, r, a0 % 360.0, a1 % 360.0 if a1 % 360.0 != a0 % 360.0 else a1))
++        last_end = j - 1
++        i = j - 1
++    if not pieces:
++        return [("poly", P)]
++    if last_end < n - 1:
++        pieces.append(("poly", P[last_end:]))
++    return pieces
++
++
++def to_entities(polys, texts=None, tol_abs: float = 0.0, layers_skip=("ARC-TEXTE",)):
++    """Polylignes -> entités DXF avec arcs / cercles vrais. Renvoie (entités, nb_arcs, nb_cercles)."""
++    ents, n_arc, n_circ = [], 0, 0
++    for p in polys:
++        pts = np.asarray(p.pts, float)
++        if len(pts) < 3 or p.layer in layers_skip:
++            ents.append(("polyline", p.layer, p.pts, p.closed))
++            continue
++        pieces = fit_polyline(pts, p.closed, tol_abs)
++        if len(pieces) == 1 and pieces[0][0] == "poly":
++            ents.append(("polyline", p.layer, p.pts, p.closed))
++            continue
++        for pc in pieces:
++            if pc[0] == "poly":
++                if len(pc[1]) >= 2:
++                    ents.append(("polyline", p.layer, pc[1], False))
++            elif pc[0] == "arc":
++                ents.append(("arc", p.layer, (pc[1], pc[2]), pc[3], pc[4], pc[5]))
++                n_arc += 1
++            else:
++                ents.append(("circle", p.layer, (pc[1], pc[2]), pc[3]))
++                n_circ += 1
++    return ents, n_arc, n_circ
++
++
++def refit_chain(pts: np.ndarray, closed: bool, step_deg: float = 4.0, min_px: float = 6.0):
++    """Ajuste un cercle sur les pixels BRUTS d'une branche de squelette (des centaines de points : précision sous-pixel,
++    bien meilleure que les quelques sommets de Douglas-Peucker). Si la branche est un cercle ou un arc net, renvoie
++    la branche ré-échantillonnée exactement sur le cercle ajusté (extrémités conservées) ; sinon None."""
++    P = np.asarray(pts, float)
++    if len(P) < 12:
++        return None
++    c = fit_circle(P)
++    if c is None:
++        return None
++    cx, cy, r, rms = c
++    if r < min_px or r > 20000:
++        return None
++    if rms > min(3.0, max(1.0, 0.004 * r)):               # bruit de squelette ≈ 0,3-0.7 px ; au-delà ce n'est pas un cercle
++        return None
++    a = np.unwrap(np.arctan2(P[:, 1] - cy, P[:, 0] - cx))
++    sweep = float(a[-1] - a[0])
++    if np.any(np.diff(np.sign(np.diff(a))) != 0) and np.ptp(a) > abs(sweep) * 1.05 + 0.2:
++        return None                                       # le tracé fait demi-tour : pas un arc
++    if closed:
++        if abs(abs(sweep) - 2 * np.pi) > np.radians(25) and np.ptp(a) < np.radians(330):
++            return None
++        n = max(12, int(360.0 / step_deg))
++        t = a[0] + np.linspace(0, 2 * np.pi * (1 if sweep >= 0 else -1), n, endpoint=False)
++        return np.c_[cx + r * np.cos(t), cy + r * np.sin(t)]
++    if abs(np.degrees(sweep)) < MIN_SWEEP:
++        return None
++    if r * abs(sweep) < 40.0 or r * (1 - np.cos(abs(sweep) / 2)) < 2.5:    # trop court / trop plat : c'est un segment
++        return None
++    n = max(4, int(abs(np.degrees(sweep)) / step_deg) + 1)
++    t = np.linspace(a[0], a[-1], n)
++    out = np.c_[cx + r * np.cos(t), cy + r * np.sin(t)]
++    out[0], out[-1] = P[0], P[-1]
++    return out
++
++
++def has_arc(pts: np.ndarray, closed: bool) -> bool:
++    """Vrai si la polyligne contient un arc ou un cercle net : à ne pas « redresser » en segments H/V (un cercle échantillonné
++    à 4° a des segments à moins de 4° de l'horizontale ou de la verticale, qui seraient aplatis en losange)."""
++    if len(pts) < 6:
++        return False
++    return any(pc[0] != "poly" for pc in fit_polyline(np.asarray(pts, float), closed, 0.0))
+diff --git a/plan2cad/pipeline.py b/plan2cad/pipeline.py
+index 5238aa5..57ea251 100644
+--- a/plan2cad/pipeline.py
++++ b/plan2cad/pipeline.py
+@@ -987,8 +987,13 @@ def anchor_crosses(master: list[Poly]) -> list[Poly]:
+     return out
+ 
+ 
+-def polys_to_entities(polys: list[Poly], texts: list | None = None):
+-    ents = [("polyline", p.layer, p.pts, p.closed) for p in polys]
++def polys_to_entities(polys: list[Poly], texts: list | None = None, fit_arcs: bool = True):
++    """fit_arcs : les suites de sommets qui suivent un cercle deviennent de vrais ARC / CERCLE."""
++    if fit_arcs:
++        from .fit import to_entities
++        ents, _, _ = to_entities(polys, tol_abs=0.0)
++    else:
++        ents = [("polyline", p.layer, p.pts, p.closed) for p in polys]
+     ents += [("text", t.layer, t.pos, t.height, t.s, t.angle) for t in (texts or [])]
+     return ents
+ 
+diff --git a/plan2cad/regularize.py b/plan2cad/regularize.py
+index b2a3417..bdfdf33 100644
+--- a/plan2cad/regularize.py
++++ b/plan2cad/regularize.py
+@@ -165,9 +165,12 @@ def regularize(polys: list, scale: float, layers=("ARC-MURS-INT", "ARC-MURS-EXT"
+     short = 2.5 * tol_dev
+     info = []                                    # un dict par polyligne traitée
+     all_h, all_v = [], []
++    from .fit import has_arc
+     for pi, p in enumerate(polys):
+         if p.layer not in layers or len(p.pts) < 2:
+             continue
++        if has_arc(p.pts, p.closed):                  # arcs et cercles nets : laissés tels quels
++            continue
+         pts = p.pts if not p.closed else np.vstack([p.pts, p.pts[:1]])
+         runs = _runs(pts, tol_dev)
+         # petits segments obliques coincés entre un H et un V : coin arrondi par le squelette -> supprimés (intersection)
+@@ -296,9 +299,12 @@ def regularize_oblique(polys: list, scale: float, layers=("ARC-MURS-INT", "ARC-M
+     out = list(polys)
+     chains = []                                                           # (poly index, i0, i1, kind, data)
+     n_line = n_arc = 0
++    from .fit import has_arc
+     for pi, p in enumerate(polys):
+         if p.layer not in layers or len(p.pts) < 3:
+             continue
++        if has_arc(p.pts, p.closed):
++            continue
+         pts = p.pts
+         _, L, ang = _seg_info(pts)
+         obl = []
+diff --git a/plan2cad/vectorize.py b/plan2cad/vectorize.py
+index edb0c22..9f493ba 100644
+--- a/plan2cad/vectorize.py
++++ b/plan2cad/vectorize.py
+@@ -174,7 +174,16 @@ def build_polylines(branches, jcent, prune_px: float, eps_px: float, min_len_px:
+     branches = keep
+ 
+     # 3. simplification de chaque branche (extrémités = nœuds conservées)
++    #    cercles et arcs nets : ajustés sur les pixels bruts (précision sous-pixel) avant toute simplification
++    from .fit import refit_chain
+     for b in branches:
++        rc = refit_chain(b["pts"], b["closed"])
++        if rc is not None:
++            b["pts"] = rc
++            b["fitted"] = True
++    for b in branches:
++        if b.get("fitted"):
++            continue
+         p = b["pts"].astype(np.float32).reshape(-1, 1, 2)
+         if len(p) >= 3:
+             s = cv2.approxPolyDP(p, eps_px, b["closed"]).reshape(-1, 2).astype(np.float64)
+diff --git a/tests/bench_fidelity.py b/tests/bench_fidelity.py
+new file mode 100644
+index 0000000..dcc851a
+--- /dev/null
++++ b/tests/bench_fidelity.py
+@@ -0,0 +1,180 @@
++"""Banc de fidélité : plan synthétique à géométrie CONNUE -> chaîne complète -> écart au vrai tracé.
++
++Le plan (murs épais H/V, mur oblique à 30°, mur courbe, deux portes avec leur arc de battant, un poteau rond,
++une cote) est dessiné en suréchantillonnage puis réduit : les bords sont donc anti-aliasés à des positions
++sous-pixel, comme sur un vrai scan. Ensuite bruit, flou, poussières, ombrage.
++
++Mesures (mm papier, 400 dpi => 1 px = 0,0635 mm) :
++  rappel     : distance de chaque point du vrai tracé au tracé produit
++  precision  : distance de chaque point produit au vrai tracé
++  entites    : nombre de LINE / POLYLINE / ARC / CIRCLE écrits dans le DXF et nombre de sommets
++
++Usage : python tests/bench_fidelity.py [dossier_de_sortie]
++"""
++from __future__ import annotations
++
++import json
++import sys
++from pathlib import Path
++
++import cv2
++import numpy as np
++from scipy.spatial import cKDTree
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++
++from plan2cad.demo import _scan_effects                      # noqa: E402
++from plan2cad.dxf import read_dxf                            # noqa: E402
++from plan2cad.pipeline import Options, run_project           # noqa: E402
++
++W, H = 3200, 2200
++DPI = 400.0
++MM_PX = 25.4 / DPI
++SS = 4                                                       # suréchantillonnage du dessin
++
++
++# ------------------------------------------------------------------ vérité terrain
++def scene():
++    """Primitives en px (axe du tracé) : ('line', p0, p1, épaisseur) / ('arc', c, r, a0, a1, épaisseur) / ('circle', c, r, ép.).
++    Angles en degrés, sens horaire à l'écran (convention cv2.ellipse, y vers le bas)."""
++    t_out, t_in, thin = 40, 24, 4
++    P = []
++    x0, y0, x1, y1 = 300, 300, 2900, 1900
++    for a, b in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))):
++        P.append(("line", a, b, t_out))
++    P.append(("line", (1200, 300), (1200, 1000), t_in))
++    P.append(("line", (1200, 1130), (1200, 1900), t_in))
++    P.append(("line", (1200, 1200), (1900, 1200), t_in))
++    P.append(("line", (2030, 1200), (2900, 1200), t_in))
++    c30, s30 = np.cos(np.radians(30)), np.sin(np.radians(30))
++    P.append(("line", (2100, 1900), (2100 + 700 * c30, 1900 - 700 * s30), t_in))          # oblique 30°
++    P.append(("arc", (700, 1500), 300, 200, 320, t_in))                                    # mur courbe
++    P.append(("arc", (1200, 1130), 130, 270, 360, thin))                                   # battant porte 1
++    P.append(("line", (1200, 1130), (1330, 1130), thin))
++    P.append(("arc", (2030, 1200), 130, 180, 270, thin))                                   # battant porte 2
++    P.append(("line", (2030, 1200), (2030, 1070), thin))
++    P.append(("circle", (1700, 700), 45, 6))                                               # poteau rond
++    P.append(("line", (300, 2050), (2900, 2050), 3))                                       # cote
++    P.append(("line", (300, 2020), (300, 2080), 3))
++    P.append(("line", (2900, 2020), (2900, 2080), 3))
++    return P
++
++
++def render(prims, seed=7, angle=0.0):
++    big = np.full((H * SS, W * SS), 255, np.uint8)
++    ink = 25
++
++    def pt(p):
++        return (int(round(p[0] * SS)), int(round(p[1] * SS)))
++
++    for pr in prims:
++        if pr[0] == "line":
++            cv2.line(big, pt(pr[1]), pt(pr[2]), ink, max(1, int(round(pr[3] * SS))), cv2.LINE_8)
++        elif pr[0] == "arc":
++            c, r, a0, a1, th = pr[1:]
++            cv2.ellipse(big, pt(c), (int(r * SS), int(r * SS)), 0, a0, a1, ink, max(1, int(round(th * SS))), cv2.LINE_8)
++        elif pr[0] == "circle":
++            cv2.circle(big, pt(pr[1]), int(pr[2] * SS), ink, max(1, int(round(pr[3] * SS))), cv2.LINE_8)
++    img = cv2.resize(big, (W, H), interpolation=cv2.INTER_AREA)
++    rng = np.random.default_rng(seed)
++    img, M = _scan_effects(img, rng, angle, 1.0, 0, 0)
++    return img, M
++
++
++def sample_truth(prims, step=2.0):
++    out = []
++    for pr in prims:
++        if pr[0] == "line":
++            a, b = np.asarray(pr[1], float), np.asarray(pr[2], float)
++            n = max(2, int(np.hypot(*(b - a)) / step))
++            t = np.linspace(0, 1, n)[:, None]
++            out.append(a + (b - a) * t)
++        elif pr[0] in ("arc", "circle"):
++            c = np.asarray(pr[1], float)
++            r = pr[2]
++            a0, a1 = (pr[3], pr[4]) if pr[0] == "arc" else (0.0, 360.0)
++            n = max(8, int(np.radians(a1 - a0) * r / step))
++            ang = np.radians(np.linspace(a0, a1, n))
++            out.append(np.c_[c[0] + r * np.cos(ang), c[1] + r * np.sin(ang)])
++    return np.vstack(out)
++
++
++# ------------------------------------------------------------------ mesure
++def densify(polys, step=2.0):
++    out = []
++    for pts, closed in polys:
++        p = np.asarray(pts, float)
++        if closed:
++            p = np.vstack([p, p[:1]])
++        for a, b in zip(p[:-1], p[1:]):
++            n = max(2, int(np.hypot(*(b - a)) / step) + 1)
++            t = np.linspace(0, 1, n)[:, None]
++            out.append(a + (b - a) * t)
++    return np.vstack(out) if out else np.zeros((0, 2))
++
++
++def dxf_stats(path):
++    lines = Path(path).read_text(encoding="utf-8").splitlines()
++    kinds = {}
++    for i in range(0, len(lines) - 1, 2):
++        if lines[i].strip() == "0":
++            v = lines[i + 1].strip()
++            kinds[v] = kinds.get(v, 0) + 1
++    return {k: kinds.get(k, 0) for k in ("LINE", "POLYLINE", "LWPOLYLINE", "ARC", "CIRCLE", "VERTEX")}
++
++
++def evaluate(dxf_path, truth_px, scale=100.0, skip_layers=("Z-POINTS-ANCRAGE",)):
++    ents, _, _ = read_dxf(dxf_path)
++    k = MM_PX * scale
++    polys = []
++    for e in ents:
++        if e["type"] != "poly" or e["layer"] in skip_layers:
++            continue
++        p = e["pts"]
++        polys.append((np.c_[p[:, 0] / k, H - p[:, 1] / k], e["closed"]))
++    out = densify(polys)
++    tr_out, tr_gt = cKDTree(out), cKDTree(truth_px)
++    d_rec = tr_out.query(truth_px)[0] * MM_PX
++    d_pre = tr_gt.query(out)[0] * MM_PX
++    return dict(
++        rappel_moy_mm=float(d_rec.mean()), rappel_p95_mm=float(np.percentile(d_rec, 95)), rappel_max_mm=float(d_rec.max()),
++        precision_moy_mm=float(d_pre.mean()), precision_p95_mm=float(np.percentile(d_pre, 95)),
++        precision_max_mm=float(d_pre.max()),
++        part_trace_retrouve_a_0p10mm=float((d_rec <= 0.10).mean()), part_trace_retrouve_a_0p25mm=float((d_rec <= 0.25).mean()),
++    ), polys
++
++
++def overlay(img, truth_px, polys, path):
++    big = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
++    big = (255 - (255 - big) // 3).astype(np.uint8)
++    for p in truth_px[::3]:
++        cv2.circle(big, (int(p[0]), int(p[1])), 1, (60, 170, 60), -1)
++    for pts, closed in polys:
++        cv2.polylines(big, [np.round(pts).astype(np.int32).reshape(-1, 1, 2)], closed, (40, 40, 220), 1, cv2.LINE_AA)
++        for q in pts:
++            cv2.circle(big, (int(round(q[0])), int(round(q[1]))), 3, (200, 0, 0), -1)
++    cv2.imwrite(str(path), big)
++
++
++def main(outdir: str | None = None, label: str = "run", **opt_kw):
++    out = Path(outdir or "bench_out") / label
++    out.mkdir(parents=True, exist_ok=True)
++    prims = scene()
++    img, _ = render(prims)
++    src = out / "plan_synthetique.png"
++    cv2.imwrite(str(src), img)
++    truth_px = sample_truth(prims)
++    opts = Options(dpi=DPI, scale=100.0, ocr=False, max_px=max(W, H), **opt_kw)
++    project = dict(name="bench", levels=[dict(name="RDC", files=dict(arc=str(src)))])
++    run_project(project, opts, str(out / "resultat"), echo=False)
++    dxf = out / "resultat" / "bench.dxf"
++    metr, polys = evaluate(dxf, truth_px)
++    metr["entites_dxf"] = dxf_stats(dxf)
++    overlay(img, truth_px, polys, out / "comparaison.png")
++    (out / "metriques.json").write_text(json.dumps(metr, indent=1, ensure_ascii=False), encoding="utf-8")
++    return metr
++
++
++if __name__ == "__main__":
++    m = main(sys.argv[1] if len(sys.argv) > 1 else None, label=sys.argv[2] if len(sys.argv) > 2 else "run")
++    print(json.dumps(m, indent=1, ensure_ascii=False))
+diff --git a/tests/test_fit.py b/tests/test_fit.py
+new file mode 100644
+index 0000000..aeec411
+--- /dev/null
++++ b/tests/test_fit.py
+@@ -0,0 +1,52 @@
++import unittest
++import numpy as np
++
++from plan2cad import fit
++from plan2cad.model import Poly
++
++
++def circle_pts(c, r, a0, a1, step=6.0):
++    t = np.radians(np.arange(a0, a1 + 1e-9, step))
++    return np.c_[c[0] + r * np.cos(t), c[1] + r * np.sin(t)]
++
++
++class FitTests(unittest.TestCase):
++    def test_arc_becomes_arc(self):
++        pts = circle_pts((100, 50), 400, 20, 110)
++        pcs = fit.fit_polyline(pts, False, 0.0)
++        self.assertEqual([p[0] for p in pcs], ["arc"])
++        self.assertAlmostEqual(pcs[0][3], 400, delta=1.0)
++
++    def test_closed_circle(self):
++        pts = circle_pts((0, 0), 250, 0, 360 - 8, 8)
++        pcs = fit.fit_polyline(pts, True, 0.0)
++        self.assertEqual(pcs[0][0], "circle")
++
++    def test_rectangle_corners_are_not_a_circle(self):
++        pts = np.array([[0, 0], [0, 100], [200, 100], [200, 0]], float)     # 4 coins : cocycliques
++        self.assertEqual([p[0] for p in fit.fit_polyline(pts, False, 0.0)], ["poly"])
++
++    def test_straight_wall_untouched(self):
++        pts = np.c_[np.linspace(0, 700, 120), 0.4 * np.sin(np.linspace(0, 40, 120))]
++        self.assertIsNone(fit.refit_chain(pts, False))
++
++    def test_refit_chain_arc_and_circle(self):
++        rng = np.random.default_rng(0)
++        arc = circle_pts((300, 300), 120, 0, 100, 0.5) + rng.normal(0, 0.25, (201, 2))
++        self.assertIsNotNone(fit.refit_chain(arc, False))
++        ring = circle_pts((300, 300), 45, 0, 359, 1.0) + rng.normal(0, 0.25, (360, 2))
++        self.assertIsNotNone(fit.refit_chain(ring, True))
++
++    def test_arc_plus_leaf_is_split(self):
++        arc = circle_pts((0, 0), 130, 0, 90, 5.0)
++        leaf = np.array([[130, 0], [130, -1], [0, 0]], float)
++        ents, n_arc, _ = fit.to_entities([Poly(np.vstack([leaf[[1, 0]][:1], arc]), "ARC-PORTE")])
++        self.assertEqual(n_arc, 1)
++
++    def test_has_arc_guards_regularization(self):
++        self.assertTrue(fit.has_arc(circle_pts((0, 0), 250, 0, 352, 8), True))
++        self.assertFalse(fit.has_arc(np.array([[0, 0], [0, 100], [200, 100]], float), False))
++
++
++if __name__ == "__main__":
++    unittest.main()
+-- 
+2.43.0
+

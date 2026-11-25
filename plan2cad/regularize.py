@@ -165,8 +165,11 @@ def regularize(polys: list, scale: float, layers=("ARC-MURS-INT", "ARC-MURS-EXT"
     short = 2.5 * tol_dev
     info = []                                    # un dict par polyligne traitée
     all_h, all_v = [], []
+    from .fit import has_arc
     for pi, p in enumerate(polys):
         if p.layer not in layers or len(p.pts) < 2:
+            continue
+        if has_arc(p.pts, p.closed):                  # arcs et cercles nets : laissés tels quels
             continue
         pts = p.pts if not p.closed else np.vstack([p.pts, p.pts[:1]])
         runs = _runs(pts, tol_dev)
@@ -296,8 +299,11 @@ def regularize_oblique(polys: list, scale: float, layers=("ARC-MURS-INT", "ARC-M
     out = list(polys)
     chains = []                                                           # (poly index, i0, i1, kind, data)
     n_line = n_arc = 0
+    from .fit import has_arc
     for pi, p in enumerate(polys):
         if p.layer not in layers or len(p.pts) < 3:
+            continue
+        if has_arc(p.pts, p.closed):
             continue
         pts = p.pts
         _, L, ang = _seg_info(pts)

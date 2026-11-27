@@ -114,7 +114,15 @@ def _group_chars(chars, H):
         ang = math.degrees(math.atan2(b, a)) % 360.0
         ang = round(ang / 90.0) % 4 * 90.0 if min(ang % 90, 90 - ang % 90) < 2.0 else ang
         sc = math.hypot(a, b) or 1.0
-        size = sc * ratio.get(ch.get("fontname"), allr) if ratios else float(ch.get("size") or 8.0)
+        if ratios and ch.get("upright", True):
+            size = sc * ratio.get(ch.get("fontname"), allr)
+        elif ch.get("size"):
+            # caractère tourné : le rapport corps/échelle appris sur le texte horizontal ne vaut PAS pour lui (une même police et
+            # une même matrice servent à des corps très différents : AutoCAD, libellés de 1 pt à côté de noms de pièces de 5 pt).
+            # La taille mesurée par pdfplumber (largeur du glyphe) est alors la meilleure estimation.
+            size = float(ch["size"])
+        else:
+            size = sc * ratio.get(ch.get("fontname"), allr) if ratios else 8.0
         size = max(size, 0.1)
         ox, oy = float(m[4]), H - float(m[5])                       # origine (ligne de base), y vers le bas
         adv = float(ch["adv"]) * sc if ch.get("adv") else (ch["x1"] - ch["x0"])

@@ -173,3 +173,27 @@ Mesure sur un plan synthétique à géométrie connue (`python tests/bench_fidel
 précision 0,121 → 0,108 mm, sommets 100 → 44, entités `ARC`/`CIRCLE` 0 → 3 / 1. Tests : `python -m unittest tests.test_fit`.
 Limites : arcs ajustés seulement sur les branches simples du squelette ; un arc fusionné avec un trait droit avant ajustement est
 repris par un ajustement sur sommets (moins précis) ; pas encore ouvert dans AutoCAD / QCAD (seul le relecteur interne a validé).
+
+
+## Métrés : murs -> pièces -> surfaces (`plan2cad metres`)
+
+    python -m plan2cad metres plan.dxf -o metres/      # JSON, CSV, DXF des pièces (calque ARC-PIECES), PNG de contrôle
+
+Les faces de murs (`ARC-MURS-INT`) sont tracées sur une grille, fermées (épaisseur pleine), les portes ferment les passages
+(segments du calque `ARC-PORTE`), puis chaque espace libre fermé est une pièce : surface nette, périmètre, nombre de portes et de
+fenêtres, libellé lu dans la pièce. Si le plan porte une surface écrite (« 5,27 m² »), elle est comparée à la surface calculée.
+
+**Contrôle sur le plan SDIS fourni** (4 plans, PDF vectoriel) : les pièces sont bien isolées, mais sur le Projet 3 la surface calculée
+dépasse la surface écrite de ≈ 17 % en moyenne (écart constant d'une pièce à l'autre : facteur linéaire 0,92, écart-type 1 à 2 %).
+Cela ressemble à une autre définition de la surface écrite ou à une échelle différente de 8 %, pas à du bruit ; l'échelle lue sur les
+cotes (1:229,6) est cohérente avec les largeurs de portes (0,83 / 0,90 / 0,93 m). À trancher avec une cote mesurée sur site.
+Limites : un espace sans mur ni porte qui communique largement avec un autre forme une seule pièce ; le mobilier n'est pas déduit ;
+les angles rentrants sont arrondis (≈ 7 cm de périmètre en moins par angle) ; lit `ARC-MURS-INT` (en mode scan brut, les murs et les
+portes ne sont pas encore reconnus sur ce type de plan, donc les métrés n'y sont pas fiables).
+
+## Tester le mode scan brut à partir d'un PDF vectoriel
+
+    python tools/pdf_to_fake_scans.py planche.pdf scans/ --dpi 300
+    python -m plan2cad vectorize scans/scan-4.png --dpi 300 --scale 229.55
+
+Le PDF vectoriel sert de vérité terrain : `plan2cad auto` sur le PDF donne le DXF de référence.

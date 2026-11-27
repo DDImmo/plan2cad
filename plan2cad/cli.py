@@ -302,6 +302,22 @@ def cmd_demo(a):
     return _execute(project, _options(a), str(Path(a.output) / "resultat"), a)
 
 
+def cmd_metres(a):
+    from . import metres as mt
+    for f in a.dxf:
+        rooms, info, paths = mt.run_on_dxf(f, a.output, px_mm=a.px)
+        if not rooms:
+            print(f"{f} : {info.get('erreur', 'aucune pièce fermée trouvée')}")
+            continue
+        s = mt.summarize(rooms)
+        print(f"{f} : {s['pieces']} pièces, {s['surface_totale_m2']} m², {s['portes']} portes, {s['fenetres']} fenêtres")
+        if s.get("controlees"):
+            print(f"  contrôle sur {s['controlees']} surfaces écrites : écart moyen {s['ecart_moyen_pct']} %, "
+                  f"médian {s['ecart_median_pct']} %, max {s['ecart_max_pct']} % ({s['dans_3pct']} dans ±3 %)")
+        for k, v in paths.items():
+            print(f"  {k}: {v}")
+
+
 def cmd_layers(a):
     print(f"{'Calque':<22}{'Couleur ACI':<13}Description")
     for k, (c, desc) in CHARTER.items():
@@ -375,6 +391,11 @@ def build_parser():
     _common(d)
     d.set_defaults(fn=cmd_demo)
 
+    m = sub.add_parser("metres", help="métrés d'un DXF plan2cad : murs -> pièces -> surfaces, périmètres, portes (JSON, CSV, DXF, PNG)")
+    m.add_argument("dxf", nargs="+")
+    m.add_argument("-o", "--output", help="dossier de sortie (défaut : à côté du DXF)")
+    m.add_argument("--px", type=float, default=10.0, help="finesse de la grille en mm (défaut 10)")
+    m.set_defaults(fn=cmd_metres)
     l = sub.add_parser("layers", help="afficher la charte de calques")
     l.set_defaults(fn=cmd_layers)
     return ap

@@ -63,6 +63,10 @@ def _common(p: argparse.ArgumentParser):
     g.add_argument("--scale", type=_scale, default="auto", help="dénominateur d'échelle du plan : 100 = 1:100. "
                    "Les DXF sont produits en mm réels. Défaut `auto` : échelle lue sur les cotes (≥ 3 concordantes), "
                    "sinon sur les surfaces de pièces ou la largeur des portes (PDF vectoriel), sinon 100.")
+    g.add_argument("--scale-from-areas", action="store_true",
+                   help="après traitement, recale l'échelle de chaque niveau sur les surfaces écrites (« 13 m² ») si elles "
+                        "sont cohérentes entre elles (≥ 5 pièces, même facteur à 5 % près, écart > 4 %) ; originaux gardés "
+                        "en .avant-recalage")
     g.add_argument("--known-length", type=_length, default=None, metavar="LONGUEUR",
                    help="longueur réelle connue du PLUS GRAND côté du bâtiment (murs, hors cotes), ex. 17.4 ou 57ft : "
                         "règle l'échelle quand aucune cote n'est lisible (écriture manuscrite…)")
@@ -139,6 +143,9 @@ def _execute(project, opts, outdir, a, base_dir=None):
             print("L'erreur est visible dans l'interface web. Ctrl+C pour quitter.")
             _wait()
         return 1
+    if getattr(a, "scale_from_areas", False):
+        from .recalage import recale_tree
+        recale_tree(outdir)
     print(f"\nTerminé en {time.time() - t0:.1f}s -> {Path(outdir).resolve()}")
     for f in sorted(Path(outdir).rglob("*")):
         if f.suffix.lower() in (".dxf", ".obj", ".stl") and "steps" not in f.parts:
@@ -257,6 +264,9 @@ def cmd_build(a):
     except Exception as e:
         print(f"\nÉchec : {e}", file=sys.stderr)
         return 1
+    if getattr(a, "scale_from_areas", False):
+        from .recalage import recale_tree
+        recale_tree(out)
     print(f"\nTerminé -> {Path(out).resolve()}")
     if srv:
         print("Interface web active. Ctrl+C pour quitter.")
@@ -279,6 +289,9 @@ def cmd_auto(a):
     except Exception as e:
         print(f"\nÉchec : {e}", file=sys.stderr)
         return 1
+    if getattr(a, "scale_from_areas", False):
+        from .recalage import recale_tree
+        recale_tree(out)
     print(f"\nTerminé -> {Path(out).resolve()}  (vérifier les confiances faibles dans l'onglet Inventaire)")
     if srv:
         print("Interface web active. Ctrl+C pour quitter.")

@@ -112,3 +112,19 @@ class ScaleCrossCheck(unittest.TestCase):
     def test_correct_scale_not_flagged(self):
         from plan2cad import metres as mt
         self.assertFalse(mt.summarize(self._rooms(1.0))["echelle_douteuse"])
+
+
+class Recalage(unittest.TestCase):
+    def test_rescale_dxf_scales_lengths_not_angles(self):
+        import tempfile
+        from pathlib import Path
+        from plan2cad import recalage as rc
+        from plan2cad.dxf import write_dxf, read_dxf_texts
+        with tempfile.TemporaryDirectory() as d:
+            src, dst = Path(d, "a.dxf"), Path(d, "b.dxf")
+            write_dxf(str(src), [("polyline", "ARC-MURS-INT", np.array([[0, 0], [1000, 0], [1000, 2000.0]]), False),
+                                 ("arc", "ARC-PORTE", (500.0, 500.0), 400.0, 0.0, 90.0)], {})
+            rc.rescale_dxf(src, dst, 0.5)
+            txt = dst.read_text()
+            self.assertIn("500", txt); self.assertIn("200", txt)           # rayon 400 -> 200, sommet 1000 -> 500
+            self.assertIn("90", txt)                                       # l'angle ne change pas

@@ -214,13 +214,13 @@ def render_png(rooms, ents, path, px_mm=40.0):
     return str(path)
 
 
-def run_on_dxf(path, outdir=None, px_mm: float = 10.0, png: bool = True):
+def run_on_dxf(path, outdir=None, px_mm: float = 10.0, png: bool = True, write: bool = True):
     """Métrés d'un DXF plan2cad. Écrit JSON / CSV / DXF des pièces (+ PNG de contrôle) à côté du DXF ou dans outdir."""
     from .dxf import read_dxf, read_dxf_texts
     ents, colors, _ = read_dxf(path)
     texts = read_dxf_texts(path)
     rooms, info = compute_rooms(ents, texts, px_mm=px_mm)
-    if not rooms:
+    if not rooms or not write:
         return rooms, info, {}
     stem = Path(path).stem
     paths = write_outputs(rooms, info, outdir or Path(path).parent, stem, colors)

@@ -115,10 +115,15 @@ def scan_inputs(paths, outdir, opts: Options, gap_mm: float = 15.0, scan_px: int
     return manifest, run
 
 
-def build_from_manifest(manifest_path, outdir, opts: Options, min_conf: float = 0.0, echo: bool = True):
+def build_from_manifest(manifest_path, outdir, opts: Options, min_conf: float = 0.0, echo: bool = True,
+                        allowed_roots=None):
     """Traite le manifeste (éventuellement corrigé à la main). Un dossier de résultats par bâtiment."""
     mp = Path(manifest_path)
+    if mp.stat().st_size > 20 * 1024 * 1024:
+        raise RuntimeError("Manifeste anormalement gros (> 20 Mo)")
     manifest = json.loads(mp.read_text(encoding="utf-8"))
+    # un manifeste est une donnée NON FIABLE : ses chemins restent sous son dossier (ou les dossiers --allow-dir)
+    roots = [mp.parent.resolve()] + [Path(r).resolve() for r in (allowed_roots or [])]
     if manifest.get("legend"):
         opts.legend = {**manifest["legend"], **(opts.legend or {})}
     skipped = 0
@@ -137,4 +142,4 @@ def build_from_manifest(manifest_path, outdir, opts: Options, min_conf: float = 
         raise RuntimeError("Le manifeste ne contient aucun plan à traiter.")
     if skipped and echo:
         print(f"({skipped} source(s) ignorée(s) : skip ou confiance < {min_conf})")
-    return run_manifest(manifest, opts, outdir, echo, base_dir=mp.parent)
+    return run_manifest(manifest, opts, outdir, echo, base_dir=mp.parent, allowed_roots=roots)

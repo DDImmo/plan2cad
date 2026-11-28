@@ -14,24 +14,34 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", str(2 ** 40))
+from . import safety
+
+os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", str(int(safety.MAX_PIXELS)))
 import cv2
 import numpy as np
 from PIL import Image
 
-Image.MAX_IMAGE_PIXELS = None
+Image.MAX_IMAGE_PIXELS = int(safety.MAX_PIXELS)        # PIL refuse au-delà de 2× (anti bombe de décompression)
 
 RASTER_EXT = {".png", ".tif", ".tiff", ".jpg", ".jpeg", ".bmp", ".webp"}
 
 
 # ------------------------------------------------------------------ PDF
 def pdf_pages(path: str) -> int:
+    n = _pdf_pages(path)
+    if n > safety.MAX_PDF_PAGES:
+        raise safety.UnsafeInput(f"PDF de {n} pages (> {safety.MAX_PDF_PAGES}) : refusé (PLAN2CAD_MAX_PDF_PAGES)")
+    return n
+
+
+def _pdf_pages(path: str) -> int:
     try:
         return len(_fitz().open(path))
     except ImportError:
         pass
     if shutil.which("pdfinfo"):
-        out = subprocess.run(["pdfinfo", path], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
+        out = subprocess.run(["pdfinfo", path], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                             timeout=60).stdout
         m = re.search(r"Pages:\s*(\d+)", out)
         if m:
             return int(m.group(1))
@@ -47,7 +57,7 @@ def _pdf_page_size(path: str, page: int):
         pass
     if shutil.which("pdfinfo"):
         out = subprocess.run(["pdfinfo", "-f", str(page), "-l", str(page), path],
-                             capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60).stdout
         m = re.search(r"Page\s+%d size:\s*([\d.]+)\s*x\s*([\d.]+)\s*pts" % page, out) or \
             re.search(r"Page size:\s*([\d.]+)\s*x\s*([\d.]+)\s*pts", out)
         if m:
@@ -91,7 +101,7 @@ def _render_pdf(path: str, page: int, dpi: float, max_px: int, crop):
         args += ["-x", str(int(x0f * sx)), "-y", str(int(y0f * sy)),
                  "-W", str(max(1, int((x1f - x0f) * sx))), "-H", str(max(1, int((y1f - y0f) * sy)))]
     with tempfile.TemporaryDirectory() as td:
-        subprocess.run(args + [path, os.path.join(td, "p")], check=True)
+        subprocess.run(args + [path, os.path.join(td, "p")], check=True, timeout=600)
         files = sorted(glob.glob(os.path.join(td, "p*.png")))
         if not files:
             raise RuntimeError("pdftoppm n'a produit aucune image")
@@ -117,7 +127,10 @@ def load_image(path: str, dpi: float = 400, max_px: int = 7000, page: int = 1, c
     info : mm_per_px (mm papier par pixel chargé), dpi effectif, scale (px chargés / px nominaux),
            nominal_size, crop_origin (px nominaux), is_color.
     """
+    max_px = safety.clamp_side(max_px)
     ext = Path(path).suffix.lower()
+    if ext != ".pdf":
+        safety.check_image_header(path)                  # refuse une bombe de décompression avant tout décodage
     if ext == ".pdf":
         rgb, eff_dpi, nominal = _render_pdf(path, page, dpi, max_px, crop)
         scale = eff_dpi / dpi

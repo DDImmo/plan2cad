@@ -212,3 +212,18 @@ Le PDF vectoriel sert de vérité terrain : `plan2cad auto` sur le PDF donne le 
 * **Échelle** : cotes > surfaces écrites (« 13 m² », y compris lues « m? » par l'OCR) > largeur des portes simples
   (≈ 0,85 m, **approximatif ±25 %**, appliqué seulement avec `--scale auto`). Sinon l'échelle est déclarée
   *non déterminée* (avertissement), plus de repli silencieux.
+
+## Sécurité : fichiers non fiables
+
+Plans reçus par mail, `manifest.json` téléchargé, dossier partagé : plan2cad applique des garde-fous (`plan2cad/safety.py`).
+
+| Risque | Parade |
+|---|---|
+| Chemins d'un manifeste (`/etc/passwd`, `../../`, lien symbolique) | chaque fichier source doit se trouver sous le dossier du manifeste ou un `--allow-dir` ; extensions limitées (png, tif, jpg, bmp, webp, pdf, dxf) ; `auto` n'autorise que les dossiers passés en argument |
+| Dossier de sortie libre | refus de `/`, du dossier personnel et des dossiers système ; noms de bâtiments / niveaux / sources assainis (plus de `../` dans un nom de fichier) |
+| Bombe de décompression (image géante) | en-tête lu AVANT décodage, limite 300 Mpx (`PLAN2CAD_MAX_PIXELS`), 500 Mo (`PLAN2CAD_MAX_FILE_MB`), 300 pages (`PLAN2CAD_MAX_PDF_PAGES`), côté de travail ≤ 20 000 px, PDF ≤ 3 M de tracés |
+| PDF piégé (mémoire, boucle) | `--isolate` : l'analyse du PDF tourne dans un sous-processus à mémoire (`--limit-memory`, 4 Go par défaut), CPU (`--limit-time`) et durée bornées ; `pdfinfo` / `pdftoppm` / `tesseract` ont un délai maximal |
+| Serveur web | écoute en 127.0.0.1 ; confinement du dossier servi corrigé (un dossier voisin au préfixe commun, `out2` pour `out`, n'était pas bloqué) ; `nosniff` + CSP |
+
+Pour des fichiers reçus : `plan2cad auto dossier -o sortie --isolate --limit-memory 4000`.
+Limites connues : pas de bac à sable réseau / système de fichiers (un conteneur reste conseillé pour un service ouvert au public) ; les DXF sont lus en mémoire (limite 500 Mo).

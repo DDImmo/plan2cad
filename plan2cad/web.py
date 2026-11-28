@@ -47,6 +47,8 @@ def make_handler(root: Path):
 
         def _send(self, code, body: bytes, ctype="text/plain", cache=False):
             self.send_response(code)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", "default-src 'self' 'unsafe-inline' data: blob:")
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             if not cache:
@@ -76,7 +78,7 @@ def make_handler(root: Path):
                 rid, rel = parts
                 base = root if rid == "_" else (root / rid)
                 target = (base / rel).resolve()
-                if not str(target).startswith(str(root)):
+                if not target.is_relative_to(root):          # (et non startswith : /out2 commence par /out)
                     return self._send(403, b"forbidden")
                 return self._file(target, cache=rel.startswith("steps/"))
             self._send(404, b"not found")

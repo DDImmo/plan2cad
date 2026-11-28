@@ -20,6 +20,9 @@ PT_MM = 25.4 / 72.0            # 1 point PDF = 0.3528 mm de papier
 _CACHE: dict = {}
 
 
+MAX_PATHS = 3_000_000
+
+
 def available() -> bool:
     try:
         import pdfplumber  # noqa: F401
@@ -151,7 +154,31 @@ def _group_chars(chars, H):
 
 
 def load(path: str, page: int = 1) -> dict:
-    """Page -> dict(w, h, paths=[...], texts=[...]) ; coordonnées en points, y vers le bas."""
+    """Page -> dict(w, h, paths=[...], texts=[...]) ; coordonnées en points, y vers le bas.
+    Avec PLAN2CAD_ISOLATE=1 (option --isolate), l'analyse du PDF tourne dans un sous-processus à mémoire / durée bornées."""
+    key = (str(path), page)
+    if key in _CACHE:
+        return _CACHE[key]
+    from . import safety
+    safety.check_input_file(path)
+    if safety.isolate_enabled():
+        d = safety.run_isolated(_load_impl, str(path), page, mem_mb=safety_mem(), cpu_s=safety_cpu())
+        _CACHE[key] = d
+        return d
+    return _load_impl(path, page)
+
+
+def safety_mem():
+    import os
+    return float(os.environ.get("PLAN2CAD_LIMIT_MEM_MB", 4096))
+
+
+def safety_cpu():
+    import os
+    return float(os.environ.get("PLAN2CAD_LIMIT_CPU_S", 600))
+
+
+def _load_impl(path: str, page: int = 1) -> dict:
     key = (str(path), page)
     if key in _CACHE:
         return _CACHE[key]
@@ -167,6 +194,9 @@ def load(path: str, page: int = 1) -> dict:
             pts, closed, nb = _path_pts(o)
             if pts is None:
                 continue
+            if len(paths) >= MAX_PATHS:
+                from .safety import UnsafeInput
+                raise UnsafeInput(f"Page trop complexe (> {MAX_PATHS} tracés) : PDF piégé ou à découper")
             col = _color(o.get("stroking_color") if stroked else o.get("non_stroking_color"))
             paths.append(dict(pts=pts, closed=closed, width=float(o.get("linewidth") or 0.0), rgb=col,
                               stroke=bool(stroked), fill=bool(o.get("fill")), nb=nb,

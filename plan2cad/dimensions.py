@@ -183,7 +183,7 @@ def estimate_scale(dims: list, mm_px: float):
         return None
     med = float(np.median(props))
     agree = [p for p in props if abs(p / med - 1) <= 0.06]
-    if len(agree) < max(3, int(0.6 * len(props))):
+    if len(agree) < max(3, -(-6 * len(props) // 10)):
         return None
     s = float(np.median(agree))
     imp = sum(1 for p_, sy in zip(props, systems) if sy == "imp" and abs(p_ / med - 1) <= 0.06) > len(agree) / 2
@@ -249,7 +249,7 @@ def _agree(props: list, systems: list):
         return None
     med = float(np.median(props))
     agree = [p for p in props if abs(p / med - 1) <= 0.08]
-    if len(agree) < max(3, int(0.6 * len(props))):
+    if len(agree) < max(3, -(-6 * len(props) // 10)):
         return None
     s = float(np.median(agree))
     imp = sum(1 for p_, sy in zip(props, systems) if sy == "imp" and abs(p_ / med - 1) <= 0.08) > len(agree) / 2

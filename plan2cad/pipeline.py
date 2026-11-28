@@ -583,7 +583,11 @@ def vectorize_source(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
             q = np.array(sdict["rect"])
             polys.append(Poly(np.stack([q[:, 0] * k, (H - q[:, 1]) * k], axis=1), opn.STAIR_LAYER, True, 0.0, "arc"))
         if lot == "arc" and raw_ink is not None and opts.openings:
-            tw = [sg for sg in scanwalls.long_wall_segments(raw_ink, mm_px)]
+            tw = scanwalls.extend_to_neighbours(scanwalls.long_wall_segments(raw_ink, mm_px), 5.0 / mm_px)
+            tw_mm = [(a_ * k, (H - b_) * k, c_ * k, (H - d_) * k) for a_, b_, c_, d_ in tw]
+            nsn = scanwalls.snap_walls(polys, tw_mm, 1.0 * scale)      # 1 mm papier
+            if nsn:
+                st.stats(murs_redresses=nsn)
             for x0_, y0_, x1_, y1_ in tw:
                 polys.append(Poly(np.array([[x0_ * k, (H - y0_) * k], [x1_ * k, (H - y1_) * k]]), scanwalls.LAYER, False, 0.0, "arc"))
             if tw:

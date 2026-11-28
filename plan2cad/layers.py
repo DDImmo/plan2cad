@@ -21,6 +21,7 @@ CHARTER: dict[str, tuple[int, str]] = {
     "CVC-CHAUFFAGE":       (30, "Radiateurs, chaudières, planchers chauffants"),
     "CVC-VENTIL":          (3, "Gaines de VMC, grilles"),
     "GAZ-RESEAU":          (40, "Réseau gaz"),
+    "ARC-MURS-TRAME":     (8, "Trame des murs d'un scan (longs traits droits) : sert aux métrés"),
     "ARC-MOBILIER":        (9, "Mobilier et équipements (traits qui ne forment pas le réseau des murs)"),
     "ARC-DETAIL":          (9, "Détails fins : mobilier, hachures, symboles (traits les plus fins)"),
     "ARC-COULEUR-ROUGE":   (1, "Tracés rouges de l'architecture (couleur d'origine conservée)"),

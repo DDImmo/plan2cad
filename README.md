@@ -210,7 +210,7 @@ Le PDF vectoriel sert de vérité terrain : `plan2cad auto` sur le PDF donne le 
   et ~30 rayons ; conditions : vantail encré, arc encré, quart de disque balayé vide, anneaux voisins vides, mur de part
   et d'autre de l'ouverture. Le rayon = largeur de la porte, mesurée sans connaître l'échelle.
 * **Échelle** : cotes > surfaces écrites (« 13 m² », y compris lues « m? » par l'OCR) > largeur des portes simples
-  (≈ 0,85 m, **approximatif ±25 %**, appliqué seulement avec `--scale auto`). Sinon l'échelle est déclarée
+  (≈ 0,75 m (0,65 à 0,85 m selon les plans), **ordre de grandeur seulement**, appliqué seulement avec `--scale auto`). Sinon l'échelle est déclarée
   *non déterminée* (avertissement), plus de repli silencieux.
 
 ## Sécurité : fichiers non fiables

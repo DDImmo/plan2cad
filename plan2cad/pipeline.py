@@ -27,6 +27,7 @@ from . import ocr as ocrmod
 from . import openings as opn
 from . import doors as doors_mod
 from . import facade
+from . import scanwalls
 from . import dimensions as dimmod
 from .model import (Text, transform_texts, Poly, bbox, sim_apply, sim_compose, sim_params, transform_polys,
                     IDENTITY)
@@ -430,7 +431,7 @@ def vectorize_source(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
                 scale = float(std_)                       # échelle normalisée la plus proche (à 3 % près)
     est_door = None
     if lot == "arc" and opts.openings and not est and not opts.known_length_mm:
-        with run.step(tag, "Échelle d'après les portes (≈ 0,85 m)") as st:
+        with run.step(tag, "Échelle d'après les portes (ordre de grandeur)") as st:
             est_door = doors_mod.scale_from_doors(swing)
             if est_door:
                 st.stats(echelle_deduite=f"1:{est_door['scale']:g}", concordantes=f"{est_door['n']}/{est_door['of']}",
@@ -486,6 +487,16 @@ def vectorize_source(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
                                                 | set(override))
                 stairs += opn.detect_arc_stairs(base, mm_px, scale, wt, exclude={i for sd in stairs for i in sd["idx"]}
                                                 | set(override))
+                # un escalier fait au plus ~8 m de long, au moins ~0,5 m de large et au moins 4 marches : les enveloppes plus
+                # grandes sont des arcs de portes / lettres / meubles dispersés qui ont été regroupés à tort
+                def _plausible(sd_):
+                    q_ = np.asarray(sd_["rect"], float) * mm_px * scale / 1000.0
+                    ext_ = q_.max(0) - q_.min(0)
+                    return max(ext_) <= 8.0 and min(ext_) >= 0.5 and sd_.get("marches", 0) >= 4
+                n_all = len(stairs)
+                stairs = [sd_ for sd_ in stairs if _plausible(sd_)]
+                if len(stairs) < n_all:
+                    st.stats(escaliers_ecartes=n_all - len(stairs))
                 for sdict in stairs:
                     for i in sdict["idx"]:
                         override[i] = opn.STAIR_LAYER
@@ -571,6 +582,12 @@ def vectorize_source(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
         for sdict in stairs:
             q = np.array(sdict["rect"])
             polys.append(Poly(np.stack([q[:, 0] * k, (H - q[:, 1]) * k], axis=1), opn.STAIR_LAYER, True, 0.0, "arc"))
+        if lot == "arc" and raw_ink is not None and opts.openings:
+            tw = [sg for sg in scanwalls.long_wall_segments(raw_ink, mm_px)]
+            for x0_, y0_, x1_, y1_ in tw:
+                polys.append(Poly(np.array([[x0_ * k, (H - y0_) * k], [x1_ * k, (H - y1_) * k]]), scanwalls.LAYER, False, 0.0, "arc"))
+            if tw:
+                st.stats(trame_murs=len(tw))
         if lot == "arc" and polys:
             walls = [p for p in polys if p.layer in ("ARC-MURS-INT", "ARC-MURS-EXT")]
             wp = np.array([p.width / scale for p in walls]) if walls else np.array([])      # mm papier

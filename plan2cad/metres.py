@@ -25,7 +25,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-WALL_LAYERS = ("ARC-MURS-INT", "ARC-MURS-EXT")
+WALL_LAYERS = ("ARC-MURS-INT", "ARC-MURS-EXT", "ARC-MURS-TRAME")
 MIN_WALL_MM = 600.0
 WINDOW_LAYER = "ARC-FENETRE"
 DOOR_LAYER = "ARC-PORTE"

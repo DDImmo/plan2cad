@@ -73,7 +73,7 @@ class SwingDoors(unittest.TestCase):
         ds = [dict(r_mm=3.7 + 0.05 * i, cx=400 * i, cy=0, r_px=40, double=False) for i in range(5)]
         est = doors.scale_from_doors(ds)
         self.assertIsNotNone(est)
-        self.assertAlmostEqual(est["scale"], 850 / 3.8, delta=0.1 * 850 / 3.8)
+        self.assertAlmostEqual(est["scale"], 750 / 3.8, delta=0.1 * 750 / 3.8)
         self.assertTrue(est["approx"])
 
     def test_no_scale_from_two_doors(self):
@@ -169,3 +169,18 @@ class RoomScaleLongWalls(unittest.TestCase):
         est = dm.room_scale(ph, ink, mm, 4.0)
         self.assertIsNotNone(est)
         self.assertAlmostEqual(est["scale"], 100.0, delta=8.0)
+
+
+class TrameMurs(unittest.TestCase):
+    def test_double_line_wall_gives_one_segment_and_furniture_ignored(self):
+        from plan2cad import scanwalls
+        mm = 0.1
+        ink = np.zeros((600, 900), np.uint8)
+        cv2.line(ink, (50, 100), (850, 100), 255, 3)                  # mur à double trait, écart 1 mm
+        cv2.line(ink, (50, 110), (850, 110), 255, 3)
+        cv2.rectangle(ink, (300, 300), (340, 330), 255, 2)            # meuble : traits de 4 mm
+        segs = scanwalls.long_wall_segments(ink, mm)
+        self.assertEqual(len(segs), 1)
+        x0, y0, x1, y1 = segs[0]
+        self.assertAlmostEqual(y0, 105, delta=3)
+        self.assertGreater(x1 - x0, 780)

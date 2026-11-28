@@ -11,7 +11,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-DOOR_NOMINAL_MM = 850.0
+DOOR_NOMINAL_MM = 750.0     # le vantail mesuré fait 0,65 à 0,85 m selon le plan : milieu de fourchette, ordre de grandeur seulement
 
 
 def _templates(r: int):
@@ -141,7 +141,7 @@ def scale_from_doors(doors, door_mm: float = DOOR_NOMINAL_MM, min_n: int = 3):
     if abs(s / std - 1) <= 0.04:
         s = float(std)
     return dict(scale=round(float(s), 1), n=int(n), of=len(rs), largeur_mm_papier=round(med, 2),
-                source="largeur des portes (battants ≈ 0,85 m)", approx=True)
+                source="largeur des portes (battants ≈ 0,75 m ±0,1) : ordre de grandeur", approx=True)
 
 
 def to_openings(doors, wt: float):

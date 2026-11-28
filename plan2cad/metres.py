@@ -27,6 +27,8 @@ import numpy as np
 
 WALL_LAYERS = ("ARC-MURS-INT", "ARC-MURS-EXT", "ARC-MURS-TRAME")
 MIN_WALL_MM = 600.0
+SMALL_UNLABELLED_M2 = 1.0     # sous ce seuil, une zone sans surface écrite n'est pas comptée comme pièce
+FURNITURE_MAX_M2 = 3.5        # une zone fermée plus petite, sans porte et adossée à une seule pièce est du mobilier
 WINDOW_LAYER = "ARC-FENETRE"
 DOOR_LAYER = "ARC-PORTE"
 
@@ -96,6 +98,39 @@ def compute_rooms(ents, texts=(), px_mm: float = 10.0, wall_gap_mm: float = 320.
         poly_mm = ap * px_mm + org
         rooms.append(dict(label=i, area=area_m2, per=per_px * px_mm / 1000.0, poly=poly_mm, mask=mask, bbox=(x, y, w, h)))
 
+    # mobilier pris pour une pièce (table dont le contour est fermé par des traits) : petite zone SANS porte dont tous les
+    # voisins sont une seule et même pièce -> elle est rendue à cette pièce (surface ajoutée), au lieu de compter à part
+    by_label = {rm["label"]: rm for rm in rooms}
+    dpts = [np.asarray(e["pts"]).mean(0) for e in doors]
+    reach0 = int(round(250.0 / px_mm))
+    def _has_door(rm, ring, x0, y0):
+        for c_ in dpts:
+            px_ = int(round((c_[0] - org[0]) / px_mm)) - x0
+            py_ = int(round((c_[1] - org[1]) / px_mm)) - y0
+            if 0 <= px_ < ring.shape[1] and 0 <= py_ < ring.shape[0] and ring[py_, px_] > 0:
+                return True
+        return False
+
+    info_nb = {}
+    for rm in rooms:
+        x, y, w, h = rm["bbox"]
+        pad = reach0 + 2
+        x0, y0, x1, y1 = max(x - pad, 0), max(y - pad, 0), min(x + w + pad, W), min(y + h + pad, H)
+        ring = cv2.dilate(rm["mask"][y0:y1, x0:x1], cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * reach0 + 1, 2 * reach0 + 1)))
+        ids = {int(v) for v in np.unique(lab[y0:y1, x0:x1][ring > 0])} - {0, rm["label"]}
+        info_nb[rm["label"]] = (ids, rm["area"] < FURNITURE_MAX_M2 and not _has_door(rm, ring, x0, y0))
+    cand = {l for l, (_i, c) in info_nb.items() if c}
+    merged = set()
+    for l in sorted(cand, key=lambda l: by_label[l]["area"]):
+        ids = info_nb[l][0]
+        if any(i not in by_label for i in ids):          # touche l'extérieur ou un résidu : pas du mobilier
+            continue
+        bigs = [i for i in ids if i not in cand]
+        if len(bigs) == 1:
+            by_label[bigs[0]]["area"] += by_label[l]["area"]
+            merged.add(l)
+    rooms = [rm for rm in rooms if rm["label"] not in merged]
+
     out = []
     dm = [(np.asarray(e["pts"]).mean(0), float(np.hypot(*(e["pts"][1] - e["pts"][0])))) for e in doors]
     wm = [np.asarray(e["pts"]).mean(0) for e in wins]
@@ -132,6 +167,8 @@ def compute_rooms(ents, texts=(), px_mm: float = 10.0, wall_gap_mm: float = 320.
             r_["ecart_pct"] = round(100.0 * (rm["area"] - stated[0]) / stated[0], 1)
         elif len(stated) > 1:
             r_["surface_lue_m2"] = stated
+        if r_["surface_lue_m2"] is None and r_["surface_m2"] < SMALL_UNLABELLED_M2:
+            continue                                   # débris < 1 m² sans surface écrite (quarts de porte, mobilier, bouts de mur)
         out.append(r_)
     info = dict(px_mm=px_mm, grille=[W, H], pieces=len(out), portes_fermees=len(doors), fenetres=len(wins), origine_mm=org.tolist())
     return out, info

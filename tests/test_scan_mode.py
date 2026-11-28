@@ -184,3 +184,27 @@ class TrameMurs(unittest.TestCase):
         x0, y0, x1, y1 = segs[0]
         self.assertAlmostEqual(y0, 105, delta=3)
         self.assertGreater(x1 - x0, 780)
+
+
+class TrameRedressee(unittest.TestCase):
+    def test_extend_free_end_to_perpendicular_wall(self):
+        from plan2cad import scanwalls
+        segs = [(0, 100, 400, 100), (500, 0, 500, 300)]       # le mur H s'arrête 100 px avant le mur V
+        out = scanwalls.extend_to_neighbours(segs, 150)
+        self.assertEqual(out[0][2], 500)
+        self.assertEqual(out[1][1], 0)                          # le mur V n'a pas bougé
+
+    def test_do_not_join_aligned_walls(self):
+        from plan2cad import scanwalls
+        segs = [(0, 100, 200, 100), (260, 100, 500, 100)]      # deux murs alignés avec une baie : on ne la ferme pas
+        out = scanwalls.extend_to_neighbours(segs, 150)
+        self.assertEqual(out[0][2], 200)
+
+    def test_snap_straightens_wobbly_wall(self):
+        from plan2cad import scanwalls
+        from plan2cad.model import Poly
+        p = Poly(np.array([[0, 0], [1000, 12], [2000, -9], [3000, 5]], float), "ARC-MURS-INT", False, 0.0, "arc")
+        n = scanwalls.snap_walls([p], [(0, 0, 3000, 0)], 50.0)
+        self.assertEqual(n, 1)
+        self.assertEqual(len(p.pts), 2)
+        self.assertTrue(np.allclose(p.pts[:, 1], 0))

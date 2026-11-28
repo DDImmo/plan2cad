@@ -26,6 +26,7 @@ import cv2
 import numpy as np
 
 WALL_LAYERS = ("ARC-MURS-INT", "ARC-MURS-EXT")
+MIN_WALL_MM = 600.0
 WINDOW_LAYER = "ARC-FENETRE"
 DOOR_LAYER = "ARC-PORTE"
 
@@ -48,6 +49,9 @@ def compute_rooms(ents, texts=(), px_mm: float = 10.0, wall_gap_mm: float = 320.
     """ents : sortie de dxf.read_dxf ; texts : [dict(s, pos, height, angle)].
     Renvoie (pièces, infos). Chaque pièce : id, surface_m2, perimetre_m, contour (mm), portes, fenetres, libelle, surface_lue_m2, ecart_pct."""
     walls = [e for e in ents if e["type"] == "poly" and (e["layer"] in wall_layers or e["layer"] == window_layer)]
+    # petits tracés isolés dans les murs (vasques, cuvettes, poteaux de 30 cm) : appareils, pas des cloisons ; ils grignotaient
+    # les petites pièces (WC de 5 m² mesurés 3 m²). Les poteaux structurels du calque EXT sont gardés.
+    walls = [e for e in walls if e["layer"] != "ARC-MURS-INT" or float(np.ptp(np.asarray(e["pts"]), axis=0).max()) >= MIN_WALL_MM]
     doors = [e for e in ents if e["type"] == "poly" and e["layer"] == door_layer and len(e["pts"]) == 2]
     wins = [e for e in ents if e["type"] == "poly" and e["layer"] == window_layer]
     if not walls:

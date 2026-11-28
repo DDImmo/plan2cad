@@ -26,6 +26,7 @@ from .layers import (text_layer, ANCHOR_LAYER, CHARTER, DEFAULT_LEGEND, DISCIPLI
 from . import ocr as ocrmod
 from . import openings as opn
 from . import doors as doors_mod
+from . import facade
 from . import dimensions as dimmod
 from .model import (Text, transform_texts, Poly, bbox, sim_apply, sim_compose, sim_params, transform_polys,
                     IDENTITY)
@@ -1213,6 +1214,11 @@ def run_project(project: dict, opts: Options, outdir: str, echo=True, normalized
                                    "des murs seraient aussi retirés. (Un scan en couleur évite ce problème.)")
 
             with run.step(f"{lname}:export" if multi else "export", "Export DXF / aperçu") as st:
+                for r_ in results:
+                    if r_.lot == "arc" and r_.info.get("vector"):
+                        nw = facade.tag_windows(r_.polys)
+                        if nw:
+                            st.stats(fenetres_de_facade=nw)
                 allpolys = [p for r in results for p in r.polys]
                 anchors = anchor_crosses(master)
                 base = f"{name}_{lname}" if multi else name

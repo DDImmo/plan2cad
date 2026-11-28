@@ -25,7 +25,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-WALL_LAYERS = ("ARC-MURS-INT",)
+WALL_LAYERS = ("ARC-MURS-INT", "ARC-MURS-EXT")
 WINDOW_LAYER = "ARC-FENETRE"
 DOOR_LAYER = "ARC-PORTE"
 
@@ -141,6 +141,16 @@ def summarize(rooms):
         e = np.array([abs(r["ecart_pct"]) for r in ok])
         s.update(ecart_moyen_pct=round(float(e.mean()), 1), ecart_median_pct=round(float(np.median(e)), 1),
                  ecart_max_pct=round(float(e.max()), 1), dans_3pct=int((e <= 3).sum()), dans_10pct=int((e <= 10).sum()))
+    big = [r for r in ok if r["surface_lue_m2"] >= 4.0 and r["surface_m2"] > 0]
+    if len(big) >= 5:
+        f = np.array([np.sqrt(r["surface_lue_m2"] / r["surface_m2"]) for r in big])
+        med = float(np.median(f))
+        spread = float(np.median(np.abs(f - med)) / med)
+        s["facteur_echelle"] = round(med, 3)
+        s["dispersion_pct"] = round(100 * spread, 1)
+        # écart CONSTANT quelle que soit la taille de la pièce = erreur d'échelle (un biais d'épaisseur de mur,
+        # lui, décroît avec la taille de la pièce)
+        s["echelle_douteuse"] = bool(abs(med - 1) > 0.04 and spread < 0.05)
     return s
 
 

@@ -96,3 +96,19 @@ class PrintedArea(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScaleCrossCheck(unittest.TestCase):
+    def _rooms(self, factor):
+        return [dict(surface_m2=a / factor ** 2, surface_lue_m2=float(a), portes=0, fenetres=0, ecart_pct=0.0)
+                for a in (6, 9, 12, 15, 20, 30)]
+
+    def test_constant_area_ratio_flags_scale(self):
+        from plan2cad import metres as mt
+        s = mt.summarize(self._rooms(0.93))
+        self.assertTrue(s["echelle_douteuse"])
+        self.assertAlmostEqual(s["facteur_echelle"], 0.93, places=2)
+
+    def test_correct_scale_not_flagged(self):
+        from plan2cad import metres as mt
+        self.assertFalse(mt.summarize(self._rooms(1.0))["echelle_douteuse"])

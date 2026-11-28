@@ -642,3 +642,20 @@ def find_gaps(H: list, V: list, k: float, wall_bbox, door_boxes: list, min_m: fl
                 kind, why = "fenetre", "trou dans la façade sans symbole (à vérifier : porte d'entrée possible)"
         out.append(dict(rect=rect, orient=o, kind=kind, why=why, t=t))
     return out
+
+
+def wall_width_classes(items: list, k: float, min_extent_m: float = 6.0, min_share: float = 0.5):
+    """Quelles classes d'épaisseur de trait dessinent les MURS ? (items : dict(pts, width, layer)).
+    L'épaisseur de trait ne dit pas à elle seule ce qui est un mur : selon le bureau d'études, le mobilier est tracé en
+    trait plus épais que les murs (ou l'inverse). On regarde la FORME : les traits d'un mur forment un réseau étendu
+    (≥ 6 m), ceux d'un meuble de petits amas. Renvoie {largeur_arrondie: part de longueur dans un grand réseau}."""
+    groups: dict = {}
+    for i, it in enumerate(items):
+        groups.setdefault(round(it["width"], 2), []).append(i)
+    out = {}
+    for w, idx in groups.items():
+        pts = [items[i]["pts"] for i in idx]
+        net = wall_network(pts, k, min_extent_m=min_extent_m)
+        ln = np.array([np.hypot(*np.diff(p, axis=0).T).sum() for p in pts])
+        out[w] = float(ln[net].sum() / ln.sum()) if ln.sum() > 0 else 0.0
+    return out

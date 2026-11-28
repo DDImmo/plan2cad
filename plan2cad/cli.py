@@ -314,6 +314,10 @@ def cmd_metres(a):
         if s.get("controlees"):
             print(f"  contrôle sur {s['controlees']} surfaces écrites : écart moyen {s['ecart_moyen_pct']} %, "
                   f"médian {s['ecart_median_pct']} %, max {s['ecart_max_pct']} % ({s['dans_3pct']} dans ±3 %)")
+        if s.get("echelle_douteuse"):
+            print(f"  ⚠ les surfaces écrites sont partout {s['facteur_echelle']:.3f}× les longueurs mesurées "
+                  f"(dispersion {s['dispersion_pct']} %) : l'ÉCHELLE du plan est probablement fausse de "
+                  f"{abs(s['facteur_echelle'] - 1) * 100:.0f} % (multiplier l'échelle par {s['facteur_echelle']:.3f})")
         for k, v in paths.items():
             print(f"  {k}: {v}")
 

@@ -868,6 +868,31 @@ def vectorize_vector(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
         if lot == "arc":
             cand = [i_ for i_, it in enumerate(items) if it["layer"] in ("ARC-MURS-EXT", "ARC-MURS-INT")]
             if cand:
+                # l'épaisseur de trait seule ne distingue pas murs et meubles (ici le mobilier est tracé PLUS épais que les murs) :
+                # on classe chaque épaisseur selon la forme de ses tracés (réseau étendu = murs, petits amas = mobilier)
+                wc = vp.wall_width_classes([items[i_] for i_ in cand], k)
+                st.stats(classes_traits={f"{w:.2f}pt": round(v, 2) for w, v in sorted(wc.items())})
+                wall_w = sorted(w for w, v in wc.items() if v >= 0.5)
+                if wall_w:
+                    allc = np.vstack([items[i_]["pts"] for i_ in cand])
+                    bb_ = np.r_[allc.min(0), allc.max(0)]
+                    edge = 0.5 * 1000 / k                                       # 0,5 m : tracé de façade
+                    n_mobilier = 0
+                    for i_ in cand:
+                        it = items[i_]
+                        w_ = round(it["width"], 2)
+                        if w_ not in wall_w:
+                            it["layer"] = "ARC-MOBILIER"
+                            n_mobilier += 1
+                        elif len(wall_w) >= 2:
+                            it["layer"] = "ARC-MURS-EXT" if w_ == wall_w[-1] else "ARC-MURS-INT"
+                        else:
+                            q = it["pts"]
+                            on_edge = (q[:, 0].min() <= bb_[0] + edge or q[:, 1].min() <= bb_[1] + edge or
+                                       q[:, 0].max() >= bb_[2] - edge or q[:, 1].max() >= bb_[3] - edge)
+                            it["layer"] = "ARC-MURS-EXT" if on_edge else "ARC-MURS-INT"
+                    st.stats(classes_murs=[f"{w:.2f}pt" for w in wall_w], mobilier_par_forme=n_mobilier)
+                    cand = [i_ for i_ in cand if items[i_]["layer"] != "ARC-MOBILIER"]
                 inwall = vp.wall_network([items[i_]["pts"] for i_ in cand], k)
                 n_mob = 0
                 for ci, ok_ in zip(cand, inwall):

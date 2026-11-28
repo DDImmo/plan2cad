@@ -972,6 +972,8 @@ def pixel_to_world(info, px, py):
 def load_dxf_source(run: Run, tag: str, src: dict) -> SourceResult:
     lot = src.get("lot", "arc")
     with run.step(tag, "Lecture du DXF") as st:
+        from . import safety
+        safety.check_input_file(src["file"])
         ents, cols, skipped = read_dxf(src["file"])
         polys = []
         default = DISCIPLINES.get(lot, DISCIPLINES["autre"])["default"]
@@ -1061,8 +1063,10 @@ def polys_to_entities(polys: list[Poly], texts: list | None = None, fit_arcs: bo
 LOT_ALIASES = {"mixed": "color", "mixte": "color", "couleur": "color"}
 
 
-def normalize_project(project: dict, base_dir: str | Path | None = None) -> dict:
-    """Accepte `files` {lot: chemin} ou `sources` [...], résout les chemins, attribue des identifiants uniques."""
+def normalize_project(project: dict, base_dir: str | Path | None = None, allowed_roots=None) -> dict:
+    """Accepte `files` {lot: chemin} ou `sources` [...], résout les chemins, attribue des identifiants uniques.
+    `allowed_roots` : si donné, chaque fichier source doit se trouver sous l'une de ces racines (manifeste non fiable)."""
+    from . import safety
     base = Path(base_dir) if base_dir else None
     out = dict(project)
 
@@ -1076,7 +1080,9 @@ def normalize_project(project: dict, base_dir: str | Path | None = None) -> dict
             s["lot"] = LOT_ALIASES.get(s.get("lot", "arc"), s.get("lot", "arc"))
             if base and not Path(s["file"]).is_absolute():
                 s["file"] = str((base / s["file"]).resolve())
-            sid = s.get("id") or s["lot"]
+            if allowed_roots is not None:
+                s["file"] = str(safety.check_input_file(s["file"], allowed_roots))
+            sid = safety.safe_name(s.get("id") or s["lot"], "src")
             seen[sid] = seen.get(sid, 0) + 1
             s["id"] = sid if seen[sid] == 1 else f"{sid}{seen[sid]}"
         srcs = [s for s in srcs if not s.get("skip")]
@@ -1091,14 +1097,17 @@ def normalize_project(project: dict, base_dir: str | Path | None = None) -> dict
     return out
 
 
-def run_manifest(project: dict, opts: Options, outdir: str, echo=True, base_dir=None):
-    """Projet à un ou plusieurs bâtiments. Un dossier de résultats (donc un run web) par bâtiment."""
-    project = normalize_project(project, base_dir)
+def run_manifest(project: dict, opts: Options, outdir: str, echo=True, base_dir=None, allowed_roots=None):
+    """Projet à un ou plusieurs bâtiments. Un dossier de résultats (donc un run web) par bâtiment.
+    `allowed_roots` : racines où les fichiers sources ont le droit de se trouver (None = pas de confinement)."""
+    from . import safety
+    project = normalize_project(project, base_dir, allowed_roots)
+    outdir = str(safety.check_outdir(outdir))
     if "buildings" not in project:
         return [run_project(project, opts, outdir, echo)]
     runs = []
     for b in project["buildings"]:
-        slug = re.sub(r"[^\w+-]+", "_", b["name"]).strip("_") or "batiment"
+        slug = safety.safe_name(b["name"], "batiment")
         if echo:
             print(f"\n=== Bâtiment {b['name']} ===")
         runs.append(run_project(dict(name=b["name"], levels=b["levels"]), opts, str(Path(outdir) / slug), echo,
@@ -1110,7 +1119,8 @@ def run_project(project: dict, opts: Options, outdir: str, echo=True, normalized
     """project = {name, levels:[{name, z, height, sources:[{file, lot, page?, crop?, id?}], anchors:{id:{src,dst}}}]}"""
     if not normalized:
         project = normalize_project(project)
-    name = project.get("name", "projet")
+    from . import safety
+    name = safety.safe_name(project.get("name", "projet"), "projet")
     run = Run(outdir, name, opts, echo)
     out = run.out
     try:
@@ -1120,7 +1130,7 @@ def run_project(project: dict, opts: Options, outdir: str, echo=True, normalized
         z_cursor = 0.0
         multi = len(project["levels"]) > 1
         for li, lv in enumerate(project["levels"]):
-            lname = lv.get("name", f"N{li}")
+            lname = safety.safe_name(lv.get("name", f"N{li}"), f"N{li}")
             z0 = float(lv.get("z", z_cursor))
             h = float(lv.get("height", opts.wall_height))
             z_cursor = z0 + h

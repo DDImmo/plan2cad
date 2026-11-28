@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import time
@@ -67,6 +68,15 @@ def _common(p: argparse.ArgumentParser):
                    help="après traitement, recale l'échelle de chaque niveau sur les surfaces écrites (« 13 m² ») si elles "
                         "sont cohérentes entre elles (≥ 5 pièces, même facteur à 5 % près, écart > 4 %) ; originaux gardés "
                         "en .avant-recalage")
+    sg = p.add_argument_group("sécurité (fichiers non fiables)")
+    sg.add_argument("--allow-dir", action="append", default=[], metavar="DOSSIER",
+                    help="dossier supplémentaire où un manifeste a le droit de désigner des plans (répétable) ; par défaut "
+                         "seul le dossier du manifeste est autorisé")
+    sg.add_argument("--isolate", action="store_true",
+                    help="lit les PDF dans un sous-processus à mémoire / durée limitées (recommandé pour des fichiers reçus)")
+    sg.add_argument("--limit-memory", type=float, default=None, metavar="MO",
+                    help="plafond de mémoire en Mo (processus, ou sous-processus avec --isolate ; défaut 4096 en isolé)")
+    sg.add_argument("--limit-time", type=float, default=None, metavar="S", help="plafond de temps CPU en secondes")
     g.add_argument("--known-length", type=_length, default=None, metavar="LONGUEUR",
                    help="longueur réelle connue du PLUS GRAND côté du bâtiment (murs, hors cotes), ex. 17.4 ou 57ft : "
                         "règle l'échelle quand aucune cote n'est lisible (écriture manuscrite…)")
@@ -127,7 +137,7 @@ def _options(a) -> Options:
                    elevations=a.elev)
 
 
-def _execute(project, opts, outdir, a, base_dir=None):
+def _execute(project, opts, outdir, a, base_dir=None, allowed_roots=None):
     """Lance le pipeline, avec le serveur web en parallèle si demandé."""
     from . import web
     srv = None
@@ -136,7 +146,7 @@ def _execute(project, opts, outdir, a, base_dir=None):
         print(f"Interface web : http://127.0.0.1:{a.port}/")
     t0 = time.time()
     try:
-        run_manifest(project, opts, outdir, base_dir=base_dir)
+        run_manifest(project, opts, outdir, base_dir=base_dir, allowed_roots=allowed_roots)
     except Exception as e:
         print(f"\nÉchec : {e}", file=sys.stderr)
         if srv:
@@ -188,7 +198,8 @@ def cmd_run(a):
                 print(f"Fichier introuvable : {f}", file=sys.stderr)
                 return 2
     outdir = a.output or f"{project['name']}_plan2cad"
-    return _execute(project, _options(a), outdir, a, base)
+    roots = ([base] + list(a.allow_dir)) if a.project else None            # un projet .json est une donnée non fiable
+    return _execute(project, _options(a), outdir, a, base, roots)
 
 
 def cmd_vectorize(a):
@@ -260,7 +271,7 @@ def cmd_build(a):
     out = a.output or str(Path(a.manifest).parent)
     srv = web.serve(out, a.port, open_browser=not a.no_browser, block=False) if a.serve else None
     try:
-        build_from_manifest(a.manifest, out, _options(a), a.min_confidence)
+        build_from_manifest(a.manifest, out, _options(a), a.min_confidence, allowed_roots=list(a.allow_dir))
     except Exception as e:
         print(f"\nÉchec : {e}", file=sys.stderr)
         return 1
@@ -285,7 +296,8 @@ def cmd_auto(a):
         manifest, _ = scan_inputs(a.paths, out, opts, a.gap, a.scan_px, a.name, adopt=True)
         _print_manifest(manifest)
         print("\n== 2/2 Vectorisation, calage, export ==")
-        build_from_manifest(Path(out, "manifest.json"), out, _options(a), a.min_confidence)
+        build_from_manifest(Path(out, "manifest.json"), out, _options(a), a.min_confidence,
+                            allowed_roots=[str(Path(x).resolve() if Path(x).is_dir() else Path(x).resolve().parent) for x in a.paths] + list(a.allow_dir))
     except Exception as e:
         print(f"\nÉchec : {e}", file=sys.stderr)
         return 1
@@ -425,7 +437,23 @@ def main(argv=None):
         except Exception:
             pass
     a = build_parser().parse_args(argv)
-    return a.fn(a)
+    from . import safety
+    if getattr(a, "isolate", False):
+        os.environ["PLAN2CAD_ISOLATE"] = "1"
+    if getattr(a, "limit_memory", None):
+        os.environ["PLAN2CAD_LIMIT_MEM_MB"] = str(a.limit_memory)
+    if getattr(a, "limit_time", None):
+        os.environ["PLAN2CAD_LIMIT_CPU_S"] = str(a.limit_time)
+    if not getattr(a, "isolate", False) and (getattr(a, "limit_memory", None) or getattr(a, "limit_time", None)):
+        safety.apply_limits(a.limit_memory, a.limit_time)        # sans sous-processus : limites du processus lui-même
+    try:
+        return a.fn(a)
+    except safety.UnsafeInput as e:
+        print(f"\nRefusé : {e}", file=sys.stderr)
+        return 2
+    except MemoryError:
+        print("\nRefusé : mémoire insuffisante (fichier trop lourd ? --limit-memory / PLAN2CAD_MAX_PIXELS)", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

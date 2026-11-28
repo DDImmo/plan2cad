@@ -43,6 +43,11 @@ def collect_files(paths) -> list[tuple[Path, Path | None]]:
                 rel = f.relative_to(p)
                 if (f.is_file() and f.suffix.lower() in SUPPORTED
                         and not any(x.startswith(".") or x == "steps" for x in rel.parts)):
+                    try:                                         # un lien symbolique ne doit pas faire sortir du dossier
+                        if not f.resolve().is_relative_to(p.resolve()):
+                            continue
+                    except (OSError, ValueError):
+                        continue
                     out.append((f, p))
         elif p.is_file():
             out.append((p, p.parent))

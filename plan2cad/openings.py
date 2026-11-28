@@ -18,7 +18,7 @@ from .layers import split_walls_by_width
 DOOR_LAYER, WINDOW_LAYER, STAIR_LAYER = "ARC-PORTE", "ARC-FENETRE", "ARC-ESCALIER"
 
 
-def wall_thickness(ink: np.ndarray, mm_px: float):
+def wall_thickness(ink: np.ndarray, mm_px: float, min_mm: float = 1.0):
     """Épaisseur (px) des murs pleins, ou None s'il n'y en a pas."""
     dt = cv2.distanceTransform(ink, cv2.DIST_L2, 3)
     ridge = (dt >= cv2.dilate(dt, np.ones((5, 5), np.uint8)) - 1e-3) & (dt > 1.5)
@@ -28,7 +28,7 @@ def wall_thickness(ink: np.ndarray, mm_px: float):
     thr = split_walls_by_width(w * mm_px)
     thick = w[w > (thr / mm_px if thr else 0)]
     wt = float(np.median(thick)) if len(thick) else float(np.median(w))
-    return wt if wt * mm_px >= 1.0 else None
+    return wt if wt * mm_px >= min_mm else None
 
 
 def _segments(wall: np.ndarray, wt: float):
@@ -169,7 +169,7 @@ def detect_openings(ink: np.ndarray, mm_px: float, scale: float, wt: float | Non
     """Renvoie (liste d'ouvertures, épaisseur de mur px). Chaque ouverture :
     dict(kind, conf, rect=(x0,y0,x1,y1) px, orient='h'|'v', width_mm (réel), hinge, sx, sy)."""
     if wt is None:
-        wt = wall_thickness(ink, mm_px)
+        wt = wall_thickness(ink, mm_px, 0.6 if raw is not None else 1.0)
     if wt is None:
         return [], None
     k = max(3, int(0.6 * wt)) | 1
@@ -547,3 +547,4 @@ def detect_arc_stairs(polys_px, mm_px: float, scale: float, wt: float | None, ex
             out.append(dict(idx=idx, rect=[tuple(map(float, q)) for q in hull], marches=len(idx) - 1,
                             conf=round(min(0.8, 0.4 + 0.1 * len(idx)), 2), kind="arcs"))
     return out
+

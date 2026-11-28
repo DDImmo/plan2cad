@@ -278,6 +278,68 @@ def build_polylines(branches, jcent, prune_px: float, eps_px: float, min_len_px:
 
 
 # ------------------------------------------------------------------ murs en double trait
+def _run_gaps(m: np.ndarray) -> np.ndarray:
+    """Largeurs (px) des intervalles blancs entre deux traits, colonne par colonne (vectorisé)."""
+    c = np.pad((m > 0).astype(np.int8), ((1, 1), (0, 0)))
+    d = np.diff(c, axis=0)
+    out = []
+    for x in range(m.shape[1]):
+        col = d[:, x]
+        s = np.flatnonzero(col == 1)
+        if len(s) < 2:
+            continue
+        e = np.flatnonzero(col == -1)
+        out.append(s[1:] - e[:-1])
+    return np.concatenate(out) if out else np.zeros(0, int)
+
+
+def detect_wall_gaps(ink: np.ndarray, mm_per_px: float, lo_mm: float = 0.5, hi_mm: float = 4.2,
+                     min_len_mm: float = 12.0, min_total_mm: float = 30.0):
+    """Murs en DOUBLE TRAIT : mesure directe de l'écart entre traits parallèles LONGS.
+
+    On garde les segments horizontaux / verticaux longs (≥ 12 mm papier : ni texte, ni mobilier, ni hachures),
+    on mesure l'intervalle blanc entre deux de ces traits successifs, et on cherche les écarts qui reviennent sur de
+    grandes longueurs (cloisons ≈ 0,7 mm papier, murs porteurs ≈ 1,8 mm, ...). Chaque pic est une épaisseur de mur.
+    Plus fiable que la granulométrie du fond sur un plan meublé (le mobilier noie le pic).
+    Renvoie (liste d'écarts mm papier triés, diagnostic) ; liste vide = pas de double trait net."""
+    ink = (ink > 0).astype(np.uint8)
+    L = max(5, int(min_len_mm / mm_per_px))
+    Hm = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((1, L), np.uint8))
+    Vm = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((L, 1), np.uint8))
+    g = np.concatenate([_run_gaps(Hm), _run_gaps(np.ascontiguousarray(Vm.T))])
+    lo, hi = max(2, int(round(lo_mm / mm_per_px))), int(round(hi_mm / mm_per_px))
+    diag = dict(traits_longs_px=int(Hm.sum() + Vm.sum()))
+    if len(g) == 0 or hi <= lo:
+        diag["paires"] = None
+        return [], diag
+    h = np.bincount(g[g <= hi + 3], minlength=hi + 4).astype(float)
+    hs = np.convolve(h, [1 / 3, 1 / 3, 1 / 3], mode="same")
+    total_mm = lambda a, b: float(h[a:b + 1].sum()) * mm_per_px       # longueur de mur parallèle (mm papier)
+    peaks = []
+    win = hs[lo:hi + 1]
+    if win.size and win.max() > 0:
+        thr = 0.15 * win.max()
+        for i in range(lo, hi + 1):
+            if hs[i] >= thr and hs[i] >= hs[max(lo, i - 2):min(hi, i + 2) + 1].max() - 1e-9 and hs[i] > 0:
+                a, b = i, i
+                while a > lo and hs[a - 1] >= 0.3 * hs[i]:
+                    a -= 1
+                while b < hi and hs[b + 1] >= 0.3 * hs[i]:
+                    b += 1
+                if total_mm(a, b) >= min_total_mm:
+                    peaks.append((a, b, hs[i]))
+    merged = []
+    for a, b, v in peaks:
+        if merged and a <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(b, merged[-1][1]), max(v, merged[-1][2]))
+        else:
+            merged.append((a, b, v))
+    gaps = [round((b + 1) * mm_per_px, 2) for a, b, _ in merged]
+    diag["paires"] = [dict(ecart_mm=round(0.5 * (a + b) * mm_per_px, 2), longueur_mm=round(total_mm(a, b)))
+                      for a, b, _ in merged]
+    return gaps, diag
+
+
 def detect_wall_gap(ink: np.ndarray, mm_per_px: float, lo_mm: float = 0.5, hi_mm: float = 4.0, n: int = 12):
     """Détecte des murs dessinés en DOUBLE TRAIT.
 

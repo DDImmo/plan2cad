@@ -18,7 +18,7 @@ _FT = re.compile(r"^(\d{1,3})\s*['’`´‘]\s*[-–]?\s*(\d{1,2}(?:[.]\d)?)?\s*
 _FT2 = re.compile(r"^(\d{1,3})\s*[-–]\s*(\d{1,2})$")                                  # « 21-0 » (pieds-pouces sans signes)
 _ROOM = re.compile(r"(\d{1,3})\s*[-–'.]\s*(\d{1,2})\s*[x×*=nX]\s*(\d{1,3})\s*[-–'.]\s*(\d{1,2})")
 _ROOM_M = re.compile(r"(\d{1,2}(?:[.,]\d{1,2})?)\s*(?:m)?\s*[x×*X]\s*(\d{1,2}(?:[.,]\d{1,2})?)\s*(?:m)?$")
-_AREA = re.compile(r"(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:m\s*[²2]|m\s*2|sq\.?\s*m)", re.I)
+_AREA = re.compile(r"(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:m\s*[²2?^'’zZ]|sq\.?\s*m)", re.I)   # l'OCR lit souvent « m² » comme « m? » ou « m^ »
 _NUM = re.compile(r"^(\d{1,6}(?:[.,]\d{1,3})?)\s*(mm|cm|m)?$", re.I)
 
 
@@ -258,3 +258,4 @@ def _agree(props: list, systems: list):
     snapped = std if abs(s / std - 1) <= 0.08 else s
     return dict(scale=float(snapped), measured=round(s, 1), n=len(agree), of=len(props),
                 systeme="pieds-pouces" if imp else "métrique", source="dimensions de pièces")
+

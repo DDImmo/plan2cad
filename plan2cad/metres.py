@@ -29,7 +29,7 @@ WALL_LAYERS = ("ARC-MURS-INT",)
 WINDOW_LAYER = "ARC-FENETRE"
 DOOR_LAYER = "ARC-PORTE"
 
-_AREA_RE = re.compile(r"(\d{1,4}(?:[.,]\d{1,2})?)\s*m\s*[²2]", re.I)
+_AREA_RE = re.compile(r"(\d{1,4}(?:[.,]\d{1,2})?)\s*m\s*[²2?^'’]", re.I)
 
 
 def printed_area(s: str):

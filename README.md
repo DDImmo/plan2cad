@@ -197,3 +197,18 @@ portes ne sont pas encore reconnus sur ce type de plan, donc les métrés n'y so
     python -m plan2cad vectorize scans/scan-4.png --dpi 300 --scale 229.55
 
 Le PDF vectoriel sert de vérité terrain : `plan2cad auto` sur le PDF donne le DXF de référence.
+
+
+## Mode scan : murs en double trait, portes, échelle
+
+* **Murs en double trait** (`vectorize.detect_wall_gaps`) : on mesure directement l'écart entre traits parallèles LONGS
+  (≥ 12 mm papier, horizontaux / verticaux). Chaque pic de l'histogramme est une épaisseur de mur (cloison ≈ 0,7 mm
+  papier, mur porteur ≈ 1,8 mm). Le mobilier ne noie plus le signal (l'ancienne granulométrie du fond reste en repli).
+  Le comblement ne remplit que les bandes entre deux traits longs et droits : arcs de porte, escaliers, chaises et
+  texte ne sont jamais noircis.
+* **Portes à battant** (`doors.py`) : gabarit « vantail + quart de cercle » corrélé avec l'encre sur 8 orientations
+  et ~30 rayons ; conditions : vantail encré, arc encré, quart de disque balayé vide, anneaux voisins vides, mur de part
+  et d'autre de l'ouverture. Le rayon = largeur de la porte, mesurée sans connaître l'échelle.
+* **Échelle** : cotes > surfaces écrites (« 13 m² », y compris lues « m? » par l'OCR) > largeur des portes simples
+  (≈ 0,85 m, **approximatif ±25 %**, appliqué seulement avec `--scale auto`). Sinon l'échelle est déclarée
+  *non déterminée* (avertissement), plus de repli silencieux.

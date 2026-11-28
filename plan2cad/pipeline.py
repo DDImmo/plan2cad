@@ -698,6 +698,9 @@ def fill_double_walls(ink: np.ndarray, mm_px: float, gap_mm: float):
 _PAGE_SCALE: dict = {}
 
 
+_SHEET_FIRM: dict = {}      # (fichier, page) -> meilleure échelle ferme lue sur un plan de la planche
+
+
 def page_scale_from_cotes(path, page: int):
     """Échelle de toute la planche d'après TOUTES ses cotes (texte ou tracés relus) : un plan peu bavard profite des autres."""
     key = (str(path), page)
@@ -794,10 +797,21 @@ def vectorize_vector(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
                 if est:
                     est["source"] = "surfaces de pièces"
                 else:
-                    est = page_scale_from_cotes(path, page) or vp.door_scale(paths)
+                    # plan peu bavard : l'échelle ferme (cotes / surfaces) d'un plan voisin de la même planche prime sur
+                    # les portes (approximatives) ; les plans d'une planche partagent presque toujours l'échelle
+                    sib = _SHEET_FIRM.get((str(path), page))
+                    if sib:
+                        est = dict(sib, source=f"même planche que {sib['from']} (échelle commune)", approx=True)
+                    else:
+                        est = page_scale_from_cotes(path, page) or vp.door_scale(paths)
             st.stats(cotes_reliees=len(dims), textes_numeriques=sum(1 for p_ in phr if dimmod.parse_value_sys(p_["text"])[0]),
                      surfaces_lues=sum(1 for p_ in phr if dimmod.parse_room_label(p_["text"])))
             if est:
+                if est.get("source") in ("cotes", "surfaces de pièces") and est.get("n", 0) >= 3:
+                    k_ = (str(path), page)
+                    if k_ not in _SHEET_FIRM or est["n"] > _SHEET_FIRM[k_]["n"]:
+                        _SHEET_FIRM[k_] = dict(scale=est["scale"], n=est["n"], of=est.get("of", est["n"]),
+                                               source=est["source"], **{"from": sid})
                 st.stats(echelle_deduite=f"1:{est['scale']:g}", concordantes=f"{est['n']}/{est['of']}",
                          source=est.get("source", "cotes"), unites=est.get("systeme", "métrique"))
                 if abs(est["scale"] / scale - 1) > 0.06:

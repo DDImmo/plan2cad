@@ -64,6 +64,7 @@ def _common(p: argparse.ArgumentParser):
     g.add_argument("--scale", type=_scale, default="auto", help="dénominateur d'échelle du plan : 100 = 1:100. "
                    "Les DXF sont produits en mm réels. Défaut `auto` : échelle lue sur les cotes (≥ 3 concordantes), "
                    "sinon sur les surfaces de pièces ou la largeur des portes (PDF vectoriel), sinon 100.")
+    g.add_argument("--no-recalage", action="store_true", help="ne jamais recaler l'échelle sur les surfaces écrites (actif par défaut avec --scale auto)")
     g.add_argument("--scale-from-areas", action="store_true",
                    help="après traitement, recale l'échelle de chaque niveau sur les surfaces écrites (« 13 m² ») si elles "
                         "sont cohérentes entre elles (≥ 5 pièces, même facteur à 5 % près, écart > 4 %) ; originaux gardés "
@@ -153,9 +154,7 @@ def _execute(project, opts, outdir, a, base_dir=None, allowed_roots=None):
             print("L'erreur est visible dans l'interface web. Ctrl+C pour quitter.")
             _wait()
         return 1
-    if getattr(a, "scale_from_areas", False):
-        from .recalage import recale_tree
-        recale_tree(outdir)
+    _recale(a, outdir)
     print(f"\nTerminé en {time.time() - t0:.1f}s -> {Path(outdir).resolve()}")
     for f in sorted(Path(outdir).rglob("*")):
         if f.suffix.lower() in (".dxf", ".obj", ".stl") and "steps" not in f.parts:
@@ -275,14 +274,22 @@ def cmd_build(a):
     except Exception as e:
         print(f"\nÉchec : {e}", file=sys.stderr)
         return 1
-    if getattr(a, "scale_from_areas", False):
-        from .recalage import recale_tree
-        recale_tree(out)
+    _recale(a, out)
     print(f"\nTerminé -> {Path(out).resolve()}")
     if srv:
         print("Interface web active. Ctrl+C pour quitter.")
         _wait()
     return 0
+
+
+def _recale(a, outdir):
+    """Recalage sur les surfaces écrites : demandé (--scale-from-areas) ou par défaut quand l'échelle est « auto »
+    (les surfaces n'agissent que si ≥ 5 pièces concordent). Une échelle imposée (--scale N) n'est jamais modifiée sans demande."""
+    if getattr(a, "no_recalage", False):
+        return
+    if getattr(a, "scale_from_areas", False) or a.scale == "auto":
+        from .recalage import recale_tree
+        recale_tree(outdir)
 
 
 def cmd_auto(a):
@@ -301,9 +308,7 @@ def cmd_auto(a):
     except Exception as e:
         print(f"\nÉchec : {e}", file=sys.stderr)
         return 1
-    if getattr(a, "scale_from_areas", False):
-        from .recalage import recale_tree
-        recale_tree(out)
+    _recale(a, out)
     print(f"\nTerminé -> {Path(out).resolve()}  (vérifier les confiances faibles dans l'onglet Inventaire)")
     if srv:
         print("Interface web active. Ctrl+C pour quitter.")

@@ -146,3 +146,11 @@ class CotesEtCalques(unittest.TestCase):
         self.assertEqual(got, [0.42, 0.57])
         self.assertEqual(vp.pick_wall_classes({0.5: 0.1}), [])
         self.assertEqual(vp.pick_wall_classes({}), [])
+
+
+class ConcordanceStricte(unittest.TestCase):
+    def test_half_agreement_rejected(self):
+        from plan2cad import dimensions as dm
+        import inspect
+        src = inspect.getsource(dm.estimate_scale)
+        self.assertIn("-(-6 * len(props) // 10)", src)   # 60 % arrondi au-dessus : 3 sur 6 ne suffit plus

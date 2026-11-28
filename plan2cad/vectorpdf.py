@@ -674,11 +674,11 @@ def find_gaps(H: list, V: list, k: float, wall_bbox, door_boxes: list, min_m: fl
     return out
 
 
-def wall_width_classes(items: list, k: float, min_extent_m: float = 6.0, min_share: float = 0.5):
+def wall_width_classes(items: list, k: float, min_extent_m: float = 5.0, min_share: float = 0.5):
     """Quelles classes d'épaisseur de trait dessinent les MURS ? (items : dict(pts, width, layer)).
     L'épaisseur de trait ne dit pas à elle seule ce qui est un mur : selon le bureau d'études, le mobilier est tracé en
     trait plus épais que les murs (ou l'inverse). On regarde la FORME : les traits d'un mur forment un réseau étendu
-    (≥ 6 m), ceux d'un meuble de petits amas. Renvoie {largeur_arrondie: part de longueur dans un grand réseau}."""
+    (≥ 5 m), ceux d'un meuble de petits amas. Renvoie {largeur_arrondie: part de longueur dans un grand réseau}."""
     groups: dict = {}
     for i, it in enumerate(items):
         groups.setdefault(round(it["width"], 2), []).append(i)
@@ -689,3 +689,12 @@ def wall_width_classes(items: list, k: float, min_extent_m: float = 6.0, min_sha
         ln = np.array([np.hypot(*np.diff(p, axis=0).T).sum() for p in pts])
         out[w] = float(ln[net].sum() / ln.sum()) if ln.sum() > 0 else 0.0
     return out
+
+
+def pick_wall_classes(shares: dict, floor: float = 0.4, rel: float = 0.5):
+    """Classes d'épaisseur qui dessinent les murs : part de réseau ≥ 0,4 ET ≥ la moitié de la meilleure classe.
+    (La part dépend un peu de l'échelle et du mobilier collé aux murs : un seuil absolu seul est instable.)"""
+    if not shares:
+        return []
+    thr = max(floor, rel * max(shares.values()))
+    return sorted(w for w, v in shares.items() if v >= thr)

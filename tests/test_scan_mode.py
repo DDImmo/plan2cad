@@ -128,3 +128,21 @@ class Recalage(unittest.TestCase):
             txt = dst.read_text()
             self.assertIn("500", txt); self.assertIn("200", txt)           # rayon 400 -> 200, sommet 1000 -> 500
             self.assertIn("90", txt)                                       # l'angle ne change pas
+
+
+class CotesEtCalques(unittest.TestCase):
+    def test_height_label_is_not_a_dimension_of_a_long_line(self):
+        # « 7,50 » posé près d'un trait de 3,7 m (à l'échelle) : pas une cote de ce trait ; « 1,00 » près d'un trait de 1 m : oui
+        mm_px, scale = 0.3528, 229.5
+        px = lambda m: m * 1000 / (mm_px * scale)
+        dims = [dict(L_px=px(3.74), cands=[7500.0]), dict(L_px=px(1.0), cands=[1000.0]), dict(L_px=px(1.1), cands=[1000.0, 10.0])]
+        kept = dm.consistent_dims(dims, mm_px, scale)
+        self.assertEqual([d["cands"][0] for d in kept], [1000.0, 1000.0])
+
+    def test_wall_classes_relative_threshold(self):
+        from plan2cad import vectorpdf as vp
+        # murs 0,57 (0,99) et 0,42 (0,8) ; mobilier 0,72 (0,25) et 0,36 (0,3)
+        got = vp.pick_wall_classes({0.36: 0.3, 0.42: 0.8, 0.57: 0.99, 0.72: 0.25})
+        self.assertEqual(got, [0.42, 0.57])
+        self.assertEqual(vp.pick_wall_classes({0.5: 0.1}), [])
+        self.assertEqual(vp.pick_wall_classes({}), [])

@@ -259,3 +259,14 @@ def _agree(props: list, systems: list):
     return dict(scale=float(snapped), measured=round(s, 1), n=len(agree), of=len(props),
                 systeme="pieds-pouces" if imp else "métrique", source="dimensions de pièces")
 
+
+
+def consistent_dims(dims, mm_px: float, scale: float, tol: float = 0.15):
+    """Garde les lignes de cote dont la LONGUEUR DESSINÉE (à l'échelle retenue) correspond à la valeur écrite (±15 %).
+    Un nombre posé près d'un long trait (cote de hauteur « 7,50 », altitude, numéro) n'est pas une cote de ce trait."""
+    ok = []
+    for d in dims:
+        real = d["L_px"] * mm_px * scale
+        if any(abs(c / real - 1) <= tol for c in d["cands"] if c > 0):
+            ok.append(d)
+    return ok

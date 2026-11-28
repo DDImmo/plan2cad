@@ -194,8 +194,9 @@ def estimate_scale(dims: list, mm_px: float):
                 systeme="pieds-pouces" if imp else "métrique")
 
 
-def room_scale(phrases: list, ink: np.ndarray, mm_px: float, wt: float | None):
-    """Échelle d'après les DIMENSIONS DE PIÈCES écrites (« 11-4 x 10-0 », « 3,50 x 4,20 », « 12,5 m² ») comparées à la
+def room_scale(phrases: list, ink: np.ndarray, mm_px: float, wt: float | None, door_mm: float | None = None):
+    """(door_mm : largeur de porte mesurée en mm papier, pour boucher les baies.)
+    Échelle d'après les DIMENSIONS DE PIÈCES écrites (« 11-4 x 10-0 », « 3,50 x 4,20 », « 12,5 m² ») comparées à la
     pièce dessinée qui entoure le libellé. Les passages de porte sont bouchés par fermeture (taille liée à l'épaisseur des
     murs, donc sans dépendre de l'échelle). Renvoie dict comme estimate_scale, ou None."""
     import cv2
@@ -203,7 +204,14 @@ def room_scale(phrases: list, ink: np.ndarray, mm_px: float, wt: float | None):
     labs = [(i, r) for i, r in labs if r]
     if not labs:
         return None
-    k = int(max(5, 5 * (wt or 20)))
+    # passage de porte : la largeur des portes MESURÉE sur le dessin (mm papier, sans connaître l'échelle) ×1,3 ; sinon 5 mm
+    k = int(max(5, 5 * (wt or 20), round((1.3 * door_mm if door_mm else 5.0) / mm_px)))
+    # seuls les LONGS traits droits (≥ 6 mm papier : murs et cloisons) ferment une pièce ; le mobilier et les symboles
+    # (traits courts, arcs) la découpaient et faisaient trouver des surfaces trop petites, donc une échelle trop grande
+    L = max(15, int(round(6.0 / mm_px)))
+    walls_only = cv2.bitwise_or(cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (L, 1))),
+                                cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, L))))
+    ink = cv2.dilate(walls_only, np.ones((3, 3), np.uint8))
     barrier = ink.copy()
     barrier = cv2.bitwise_or(barrier, cv2.morphologyEx(ink, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (k, 1))))
     barrier = cv2.bitwise_or(barrier, cv2.morphologyEx(ink, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (1, k))))
@@ -241,7 +249,16 @@ def room_scale(phrases: list, ink: np.ndarray, mm_px: float, wt: float | None):
         else:
             props.append(float(np.sqrt(r["m2"] * 1e6 / (a * mm_px * mm_px))))
         systems.append(r["sys"])
-    return _agree(props, systems)
+    est = _agree(props, systems)
+    if est is None and len(props) >= 4:
+        # pas d'accord serré (pièces ouvertes, meubles qui découpent) : médiane si la dispersion reste modérée (Q3/Q1 ≤ 1,35)
+        q1, med, q3 = np.percentile(props, [25, 50, 75])
+        if q3 / q1 <= 1.35:
+            from_std = min(STD_METRIC, key=lambda x: abs(np.log(med / x)))
+            est = dict(scale=float(from_std if abs(med / from_std - 1) <= 0.08 else med), measured=round(float(med), 1),
+                       n=int(sum(1 for p_ in props if abs(p_ / med - 1) <= 0.2)), of=len(props), systeme="métrique",
+                       source="surfaces de pièces (approximatif)", approx=True)
+    return est
 
 
 def _agree(props: list, systems: list):

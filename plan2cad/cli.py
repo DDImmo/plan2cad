@@ -63,6 +63,10 @@ def _common(p: argparse.ArgumentParser):
     g.add_argument("--scale", type=_scale, default="auto", help="dénominateur d'échelle du plan : 100 = 1:100. "
                    "Les DXF sont produits en mm réels. Défaut `auto` : échelle lue sur les cotes (≥ 3 concordantes), "
                    "sinon sur les surfaces de pièces ou la largeur des portes (PDF vectoriel), sinon 100.")
+    g.add_argument("--scale-from-areas", action="store_true",
+                   help="après traitement, recale l'échelle de chaque niveau sur les surfaces écrites (« 13 m² ») si elles "
+                        "sont cohérentes entre elles (≥ 5 pièces, même facteur à 5 % près, écart > 4 %) ; originaux gardés "
+                        "en .avant-recalage")
     g.add_argument("--known-length", type=_length, default=None, metavar="LONGUEUR",
                    help="longueur réelle connue du PLUS GRAND côté du bâtiment (murs, hors cotes), ex. 17.4 ou 57ft : "
                         "règle l'échelle quand aucune cote n'est lisible (écriture manuscrite…)")
@@ -139,6 +143,9 @@ def _execute(project, opts, outdir, a, base_dir=None):
             print("L'erreur est visible dans l'interface web. Ctrl+C pour quitter.")
             _wait()
         return 1
+    if getattr(a, "scale_from_areas", False):
+        from .recalage import recale_tree
+        recale_tree(outdir)
     print(f"\nTerminé en {time.time() - t0:.1f}s -> {Path(outdir).resolve()}")
     for f in sorted(Path(outdir).rglob("*")):
         if f.suffix.lower() in (".dxf", ".obj", ".stl") and "steps" not in f.parts:
@@ -257,6 +264,9 @@ def cmd_build(a):
     except Exception as e:
         print(f"\nÉchec : {e}", file=sys.stderr)
         return 1
+    if getattr(a, "scale_from_areas", False):
+        from .recalage import recale_tree
+        recale_tree(out)
     print(f"\nTerminé -> {Path(out).resolve()}")
     if srv:
         print("Interface web active. Ctrl+C pour quitter.")
@@ -279,6 +289,9 @@ def cmd_auto(a):
     except Exception as e:
         print(f"\nÉchec : {e}", file=sys.stderr)
         return 1
+    if getattr(a, "scale_from_areas", False):
+        from .recalage import recale_tree
+        recale_tree(out)
     print(f"\nTerminé -> {Path(out).resolve()}  (vérifier les confiances faibles dans l'onglet Inventaire)")
     if srv:
         print("Interface web active. Ctrl+C pour quitter.")
@@ -300,6 +313,26 @@ def cmd_demo(a):
     if not a.remove_text:
         a.remove_text = ["arc"]
     return _execute(project, _options(a), str(Path(a.output) / "resultat"), a)
+
+
+def cmd_metres(a):
+    from . import metres as mt
+    for f in a.dxf:
+        rooms, info, paths = mt.run_on_dxf(f, a.output, px_mm=a.px)
+        if not rooms:
+            print(f"{f} : {info.get('erreur', 'aucune pièce fermée trouvée')}")
+            continue
+        s = mt.summarize(rooms)
+        print(f"{f} : {s['pieces']} pièces, {s['surface_totale_m2']} m², {s['portes']} portes, {s['fenetres']} fenêtres")
+        if s.get("controlees"):
+            print(f"  contrôle sur {s['controlees']} surfaces écrites : écart moyen {s['ecart_moyen_pct']} %, "
+                  f"médian {s['ecart_median_pct']} %, max {s['ecart_max_pct']} % ({s['dans_3pct']} dans ±3 %)")
+        if s.get("echelle_douteuse"):
+            print(f"  ⚠ les surfaces écrites sont partout {s['facteur_echelle']:.3f}× les longueurs mesurées "
+                  f"(dispersion {s['dispersion_pct']} %) : l'ÉCHELLE du plan est probablement fausse de "
+                  f"{abs(s['facteur_echelle'] - 1) * 100:.0f} % (multiplier l'échelle par {s['facteur_echelle']:.3f})")
+        for k, v in paths.items():
+            print(f"  {k}: {v}")
 
 
 def cmd_layers(a):
@@ -375,6 +408,11 @@ def build_parser():
     _common(d)
     d.set_defaults(fn=cmd_demo)
 
+    m = sub.add_parser("metres", help="métrés d'un DXF plan2cad : murs -> pièces -> surfaces, périmètres, portes (JSON, CSV, DXF, PNG)")
+    m.add_argument("dxf", nargs="+")
+    m.add_argument("-o", "--output", help="dossier de sortie (défaut : à côté du DXF)")
+    m.add_argument("--px", type=float, default=10.0, help="finesse de la grille en mm (défaut 10)")
+    m.set_defaults(fn=cmd_metres)
     l = sub.add_parser("layers", help="afficher la charte de calques")
     l.set_defaults(fn=cmd_layers)
     return ap

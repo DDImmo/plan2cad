@@ -25,6 +25,7 @@ from .layers import (text_layer, ANCHOR_LAYER, CHARTER, DEFAULT_LEGEND, DISCIPLI
                      layer_color, split_walls_by_width)
 from . import ocr as ocrmod
 from . import openings as opn
+from . import doors as doors_mod
 from . import dimensions as dimmod
 from .model import (Text, transform_texts, Poly, bbox, sim_apply, sim_compose, sim_params, transform_polys,
                     IDENTITY)
@@ -317,47 +318,55 @@ def vectorize_source(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
     if lot == "arc" and opts.wall_mode != "solid":
         with run.step(tag, "Murs en double trait ?") as st:
             if opts.wall_gap_mm:
-                gap_mm, diag = opts.wall_gap_mm, {"force": True}
+                gaps_mm, diag = [opts.wall_gap_mm], {"force": True}
             else:
-                gap_mm, diag = vz.detect_wall_gap(ink, mm_px)
-                if opts.wall_mode == "double" and gap_mm is None:
-                    gap_mm = 2.0
+                gaps_mm, diag = vz.detect_wall_gaps(ink, mm_px)        # écarts mesurés entre traits parallèles longs
+                if not gaps_mm:
+                    g1, d1 = vz.detect_wall_gap(ink, mm_px)             # repli : granulométrie du fond
+                    diag.update({k_: v_ for k_, v_ in d1.items() if k_ != "paires"})
+                    gaps_mm = [g1] if g1 else []
+                if opts.wall_mode == "double" and not gaps_mm:
+                    gaps_mm = [2.0]
                     diag["repli"] = "écart 2 mm papier par défaut"
             st.stats(**diag)
-            if gap_mm:
+            if gaps_mm:
                 raw_ink = ink.copy()
-                k = int(np.ceil(gap_mm / mm_px)) + 2
-                closed = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
-                # on ne garde du comblement que les LONGUES bandes entre deux traits de mur : les escaliers, symboles et
-                # autres paires de traits rapprochés (marches, hachures) ne doivent pas être noyés dans le noir
-                fill = cv2.bitwise_and(closed, cv2.bitwise_not(ink))
-                nf, lf, sf, _ = cv2.connectedComponentsWithStats(fill, connectivity=8)
+                base_ink = ink.copy()
                 lmin = 12.0 / mm_px
-                keepf = np.zeros(nf, bool)
-                keepf[1:] = np.maximum(sf[1:, cv2.CC_STAT_WIDTH], sf[1:, cv2.CC_STAT_HEIGHT]) >= lmin
-                # une bande de mur a une épaisseur CONSTANTE (≈ écart entre les deux traits) ; un coin d'escalier ou un
-                # éventail de marches se remplit en biseau (épaisseur variable) : rejeté
-                dtf = cv2.distanceTransform(fill, cv2.DIST_L2, 3)
-                ridge = (dtf >= cv2.dilate(dtf, np.ones((3, 3), np.uint8)) - 1e-3) & (dtf > 1.0)
-                half = 0.5 * (gap_mm / mm_px)
-                tot = np.bincount(lf[ridge], minlength=nf).astype(float)
-                good = np.bincount(lf[ridge & (dtf >= 0.6 * half)], minlength=nf).astype(float)
-                uniform = np.zeros(nf, bool)
-                uniform[1:] = good[1:] >= 0.6 * np.maximum(tot[1:], 1)
-                keepf &= uniform
-                dropped = int((~keepf[1:]).sum())
-                ink = cv2.bitwise_or(ink, (keepf[lf] * 255).astype(np.uint8))
+                dropped = 0
+                # bandes entre deux traits LONGS et DROITS (H ou V) : le mobilier, les arcs de porte, les escaliers et le texte
+                # (traits courts ou courbes) ne sont jamais comblés ; un mur courbe reste en double trait
+                Lk = max(5, int(lmin))
+                Hm = cv2.morphologyEx(base_ink, cv2.MORPH_OPEN, np.ones((1, Lk), np.uint8))
+                Vm = cv2.morphologyEx(base_ink, cv2.MORPH_OPEN, np.ones((Lk, 1), np.uint8))
+                for gap_mm in gaps_mm:
+                    kk = int(np.ceil(gap_mm / mm_px)) + 1
+                    for lines, ker in ((Hm, (1, kk)), (Vm, (kk, 1))):
+                        # ker = (largeur, hauteur) cv2 ; H : on comble en vertical entre deux traits horizontaux
+                        kern = np.ones((kk, 1), np.uint8) if lines is Hm else np.ones((1, kk), np.uint8)
+                        fill = cv2.bitwise_and(cv2.morphologyEx(lines, cv2.MORPH_CLOSE, kern), cv2.bitwise_not(lines))
+                        fill = cv2.bitwise_and(fill, cv2.bitwise_not(base_ink))
+                        nf, lf, sf, _ = cv2.connectedComponentsWithStats(fill, connectivity=8)
+                        keepf = np.zeros(nf, bool)
+                        keepf[1:] = np.maximum(sf[1:, cv2.CC_STAT_WIDTH], sf[1:, cv2.CC_STAT_HEIGHT]) >= lmin
+                        dropped += int((~keepf[1:]).sum())
+                        ink = cv2.bitwise_or(ink, (keepf[lf] * 255).astype(np.uint8))
                 st.stats(petits_remplissages_ignores=dropped)
+                k = int(np.ceil(max(gaps_mm) / mm_px)) + 2
                 # petits trous résiduels aux angles : ils créeraient des boucles parasites dans le squelette
                 nb, lab, stt, _ = cv2.connectedComponentsWithStats(255 - ink, connectivity=4)
-                small = stt[:, cv2.CC_STAT_AREA] < 1.5 * k * k            # trous d'angle seulement (pas les cases d'un escalier)
+                small = stt[:, cv2.CC_STAT_AREA] < 0.8 * k * k            # trous d'angle seulement (pas les cases d'un escalier)
                 small[0] = False
-                small &= (stt[:, cv2.CC_STAT_WIDTH] < 1.6 * k) & (stt[:, cv2.CC_STAT_HEIGHT] < 1.6 * k)
+                small &= (stt[:, cv2.CC_STAT_WIDTH] < 1.1 * k) & (stt[:, cv2.CC_STAT_HEIGHT] < 1.1 * k)
+                # ... et seulement s'ils touchent une bande comblée (un vrai angle de mur, pas un cercle de chaise ou une marche)
+                added = cv2.dilate(cv2.bitwise_and(ink, cv2.bitwise_not(base_ink)), np.ones((5, 5), np.uint8)) > 0
+                touch = np.bincount(lab[added & (ink == 0)], minlength=len(stt)).astype(float)
+                small &= touch >= 0.3 * np.sqrt(np.maximum(stt[:, cv2.CC_STAT_AREA], 1)) * 4
                 if small.any():
                     ink = np.where(small[lab], 255, ink).astype(np.uint8)
                     st.stats(trous_combles=int(small.sum()))
                 masks = {"__ink__": ink}
-                st.stats(decision=f"double trait : comblé sur {gap_mm:.2f} mm papier")
+                st.stats(decision="double trait : comblé sur " + " + ".join(f"{g_:.2f}" for g_ in gaps_mm) + " mm papier")
                 st.image("murs_combles", 255 - ink)
             else:
                 st.stats(decision="murs pleins (aucun traitement)")
@@ -369,8 +378,9 @@ def vectorize_source(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
     for cname, m in masks.items():
         per_class[cname] = vectorize_mask(run, tag, m, mm_px, opts, "" if cname == "__ink__" else cname)
 
-    wt = opn.wall_thickness(ink, mm_px) if lot == "arc" else None
+    wt = opn.wall_thickness(ink, mm_px, 0.6 if raw_ink is not None else 1.0) if lot == "arc" else None
     dims, cote_idx = [], {}
+    est = None
     if lot == "arc" and phr:
         with run.step(tag, "Cotes (échelle lue sur le plan)") as st:
             base = per_class.get("__ink__", [])
@@ -410,7 +420,30 @@ def vectorize_source(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
             std_ = min(dimmod.STD_SCALES, key=lambda x: abs(np.log(scale / x)))
             if abs(scale / std_ - 1) <= 0.03:
                 scale = float(std_)                       # échelle normalisée la plus proche (à 3 % près)
+    swing = []
+    if lot == "arc" and opts.openings:
+        with run.step(tag, "Portes à battant (vantail + arc)") as st:
+            swing = doors_mod.detect_swing_doors(raw_ink if raw_ink is not None else ink, mm_px)
+            doors_mod.mark_doubles(swing)
+            st.stats(portes=len(swing), doubles=sum(1 for d_ in swing if d_["double"]))
+    est_door = None
+    if lot == "arc" and opts.openings and not est and not opts.known_length_mm:
+        with run.step(tag, "Échelle d'après les portes (≈ 0,85 m)") as st:
+            est_door = doors_mod.scale_from_doors(swing)
+            if est_door:
+                st.stats(echelle_deduite=f"1:{est_door['scale']:g}", concordantes=f"{est_door['n']}/{est_door['of']}",
+                         largeur_papier_mm=est_door["largeur_mm_papier"], fiabilite="approximative (±25 %)")
+                if opts.scale_auto:
+                    scale = est_door["scale"]
+                    st.log(f"✔ échelle ≈ 1:{scale:g} d'après la largeur des portes (approximative, à confirmer) : appliquée")
+                else:
+                    st.log(f"⚠ Les portes indiquent environ 1:{est_door['scale']:g} (échelle utilisée 1:{scale:g}). "
+                           f"Relancer avec --scale auto ou --scale N.")
+            else:
+                st.log("⚠ Échelle NON déterminée (ni cotes, ni surfaces écrites, ni portes concordantes) : dimensions "
+                       f"calculées avec 1:{scale:g} par défaut — donner --scale ou --known-length.")
     info["scale_used"] = scale
+    info["scale_source"] = (est or est_door or {}).get("source", "imposée/par défaut")
     k = mm_px * scale
 
     openings = []
@@ -421,6 +454,7 @@ def vectorize_source(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
                 st.stats(statut="pas de murs pleins reconnus : portes / fenêtres non cherchées")
             else:
                 cnt = {}
+                openings = doors_mod.merge_openings(openings, doors_mod.to_openings(swing, wt2), mm_px, scale) if swing else openings
                 opn.tag_envelope(ink, openings, wt2, mm_px, scale)
                 for o in openings:
                     cnt[o["kind"]] = cnt.get(o["kind"], 0) + 1
@@ -834,6 +868,31 @@ def vectorize_vector(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
         if lot == "arc":
             cand = [i_ for i_, it in enumerate(items) if it["layer"] in ("ARC-MURS-EXT", "ARC-MURS-INT")]
             if cand:
+                # l'épaisseur de trait seule ne distingue pas murs et meubles (ici le mobilier est tracé PLUS épais que les murs) :
+                # on classe chaque épaisseur selon la forme de ses tracés (réseau étendu = murs, petits amas = mobilier)
+                wc = vp.wall_width_classes([items[i_] for i_ in cand], k)
+                st.stats(classes_traits={f"{w:.2f}pt": round(v, 2) for w, v in sorted(wc.items())})
+                wall_w = sorted(w for w, v in wc.items() if v >= 0.5)
+                if wall_w:
+                    allc = np.vstack([items[i_]["pts"] for i_ in cand])
+                    bb_ = np.r_[allc.min(0), allc.max(0)]
+                    edge = 0.5 * 1000 / k                                       # 0,5 m : tracé de façade
+                    n_mobilier = 0
+                    for i_ in cand:
+                        it = items[i_]
+                        w_ = round(it["width"], 2)
+                        if w_ not in wall_w:
+                            it["layer"] = "ARC-MOBILIER"
+                            n_mobilier += 1
+                        elif len(wall_w) >= 2:
+                            it["layer"] = "ARC-MURS-EXT" if w_ == wall_w[-1] else "ARC-MURS-INT"
+                        else:
+                            q = it["pts"]
+                            on_edge = (q[:, 0].min() <= bb_[0] + edge or q[:, 1].min() <= bb_[1] + edge or
+                                       q[:, 0].max() >= bb_[2] - edge or q[:, 1].max() >= bb_[3] - edge)
+                            it["layer"] = "ARC-MURS-EXT" if on_edge else "ARC-MURS-INT"
+                    st.stats(classes_murs=[f"{w:.2f}pt" for w in wall_w], mobilier_par_forme=n_mobilier)
+                    cand = [i_ for i_ in cand if items[i_]["layer"] != "ARC-MOBILIER"]
                 inwall = vp.wall_network([items[i_]["pts"] for i_ in cand], k)
                 n_mob = 0
                 for ci, ok_ in zip(cand, inwall):

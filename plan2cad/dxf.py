@@ -219,3 +219,38 @@ def read_dxf(path):
             skipped[v] = skipped.get(v, 0) + 1
         j = k
     return ents, layer_colors, skipped
+
+
+def read_dxf_texts(path):
+    """Textes (TEXT) d'un DXF ASCII : [dict(s, pos(2,), height, angle, layer)]. Utile pour les métrés (surfaces écrites, libellés)."""
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    try:
+        txt = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        txt = raw.decode("cp1252", errors="replace")
+    lines = txt.splitlines()
+    pairs = []
+    for i in range(0, len(lines) - 1, 2):
+        try:
+            pairs.append((int(lines[i].strip()), lines[i + 1]))
+        except ValueError:
+            continue
+    out, n, j, in_ent = [], len(pairs), 0, False
+    while j < n:
+        c, v = pairs[j][0], pairs[j][1].strip()
+        if c == 0 and v == "SECTION" and j + 1 < n and pairs[j + 1][1].strip() == "ENTITIES":
+            in_ent = True
+        elif c == 0 and v == "ENDSEC":
+            in_ent = False
+        elif in_ent and c == 0 and v == "TEXT":
+            k, d = j + 1, {}
+            while k < n and pairs[k][0] != 0:
+                d.setdefault(pairs[k][0], pairs[k][1])
+                k += 1
+            out.append(dict(s=d.get(1, "").strip(), pos=np.array([float(d.get(10, 0)), float(d.get(20, 0))]),
+                            height=float(d.get(40, 0)), angle=float(d.get(50, 0)), layer=d.get(8, "0").strip()))
+            j = k
+            continue
+        j += 1
+    return out

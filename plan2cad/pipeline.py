@@ -765,10 +765,15 @@ def vectorize_vector(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
             for t_ in texts:
                 b = t_["bb"]
                 horiz = round(t_["angle"]) % 180 == 0
-                phr.append(dict(text=t_["s"], x=b[0], y=b[1], w=b[2] - b[0], h=b[3] - b[1], th=t_["size"],
+                # un entier de 1-2 chiffres (« 13 », « 8 ») est un numéro de pièce / un nombre de postes, pas une cote :
+                # il se collait à un trait de mobilier et le classait en ARC-COTES
+                txt = "" if re.fullmatch(r"\s*\d{1,2}\s*", t_["s"]) else t_["s"]
+                phr.append(dict(text=txt, x=b[0], y=b[1], w=b[2] - b[0], h=b[3] - b[1], th=t_["size"],
                                 angle=0 if horiz else 90, conf=100))
-            polys_px = [(p_["pts"], p_["closed"], p_["width"]) for p_ in paths]
-            dims = dimmod.find_dimensions(phr, polys_px, PT, None)
+            # une ligne de cote est fine et noire / grise : ni trait coloré (mobilier, réseaux), ni trait de mur
+            polys_px = [(p_["pts"], p_["closed"], 99.0 if (vp.color_name(p_["rgb"]) or p_["width"] >= 0.5) else p_["width"])
+                        for p_ in paths]
+            dims = dimmod.find_dimensions(phr, polys_px, PT, 1.0)
             est = dimmod.estimate_scale(dims, PT)
             if est:
                 est["source"] = "cotes"
@@ -805,6 +810,10 @@ def vectorize_vector(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
                     st.stats(verdict=f"cohérent avec 1:{scale:g}")
             else:
                 st.stats(echelle_deduite="non déterminée (moins de 3 cotes concordantes)")
+            n_dims = len(dims)
+            dims = dimmod.consistent_dims(dims, PT, scale)
+            if len(dims) < n_dims:
+                st.stats(cotes_ecartees_longueur_incoherente=n_dims - len(dims))
             for dd in dims:
                 for pj in dd.get("polys", [dd["poly"]]):
                     cote_paths.add(pj)
@@ -872,7 +881,7 @@ def vectorize_vector(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
                 # on classe chaque épaisseur selon la forme de ses tracés (réseau étendu = murs, petits amas = mobilier)
                 wc = vp.wall_width_classes([items[i_] for i_ in cand], k)
                 st.stats(classes_traits={f"{w:.2f}pt": round(v, 2) for w, v in sorted(wc.items())})
-                wall_w = sorted(w for w, v in wc.items() if v >= 0.5)
+                wall_w = vp.pick_wall_classes(wc)
                 if wall_w:
                     allc = np.vstack([items[i_]["pts"] for i_ in cand])
                     bb_ = np.r_[allc.min(0), allc.max(0)]

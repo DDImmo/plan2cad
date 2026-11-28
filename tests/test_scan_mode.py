@@ -154,3 +154,18 @@ class ConcordanceStricte(unittest.TestCase):
         import inspect
         src = inspect.getsource(dm.estimate_scale)
         self.assertIn("-(-6 * len(props) // 10)", src)   # 60 % arrondi au-dessus : 3 sur 6 ne suffit plus
+
+
+class RoomScaleLongWalls(unittest.TestCase):
+    def test_furniture_does_not_cut_rooms(self):
+        import cv2
+        from plan2cad import dimensions as dm
+        mm = 0.1                                                  # 0,1 mm papier / px ; plan au 1:100
+        ink = np.zeros((1000, 1100), np.uint8)
+        for (x0, y0) in ((50, 50), (560, 50), (50, 500), (560, 500)):   # 4 pièces de 5 m x 4 m = 20 m²
+            cv2.rectangle(ink, (x0, y0), (x0 + 500, y0 + 400), 255, 4)
+            cv2.rectangle(ink, (x0 + 100, y0 + 100), (x0 + 160, y0 + 140), 255, 2)   # meuble (trait court)
+        ph = [dict(text="20 m²", x=x + 200, y=y + 200, w=60, h=20, th=20) for x, y in ((50, 50), (560, 50), (50, 500), (560, 500))]
+        est = dm.room_scale(ph, ink, mm, 4.0)
+        self.assertIsNotNone(est)
+        self.assertAlmostEqual(est["scale"], 100.0, delta=8.0)

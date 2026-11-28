@@ -382,6 +382,12 @@ def vectorize_source(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
     wt = opn.wall_thickness(ink, mm_px, 0.6 if raw_ink is not None else 1.0) if lot == "arc" else None
     dims, cote_idx = [], {}
     est = None
+    swing = []
+    if lot == "arc" and opts.openings:
+        with run.step(tag, "Portes à battant (vantail + arc)") as st:
+            swing = doors_mod.detect_swing_doors(raw_ink if raw_ink is not None else ink, mm_px)
+            doors_mod.mark_doubles(swing)
+            st.stats(portes=len(swing), doubles=sum(1 for d_ in swing if d_["double"]))
     if lot == "arc" and phr:
         with run.step(tag, "Cotes (échelle lue sur le plan)") as st:
             base = per_class.get("__ink__", [])
@@ -390,7 +396,8 @@ def vectorize_source(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
             if est:
                 est["source"] = "cotes"
             else:
-                est = dimmod.room_scale(phr, ink, mm_px, wt)
+                door_w = [d_["r_mm"] for d_ in swing if not d_.get("double")]
+                est = dimmod.room_scale(phr, ink, mm_px, wt, door_mm=float(np.median(door_w)) if len(door_w) >= 3 else None)
             st.stats(cotes_reliees=len(dims), cotes_lues=sum(1 for p_ in phr if dimmod.parse_value_sys(p_["text"])[0]),
                      dimensions_de_pieces=sum(1 for p_ in phr if dimmod.parse_room_label(p_["text"])))
             if est:
@@ -421,12 +428,6 @@ def vectorize_source(run: Run, tag: str, src: dict, opts: Options) -> SourceResu
             std_ = min(dimmod.STD_SCALES, key=lambda x: abs(np.log(scale / x)))
             if abs(scale / std_ - 1) <= 0.03:
                 scale = float(std_)                       # échelle normalisée la plus proche (à 3 % près)
-    swing = []
-    if lot == "arc" and opts.openings:
-        with run.step(tag, "Portes à battant (vantail + arc)") as st:
-            swing = doors_mod.detect_swing_doors(raw_ink if raw_ink is not None else ink, mm_px)
-            doors_mod.mark_doubles(swing)
-            st.stats(portes=len(swing), doubles=sum(1 for d_ in swing if d_["double"]))
     est_door = None
     if lot == "arc" and opts.openings and not est and not opts.known_length_mm:
         with run.step(tag, "Échelle d'après les portes (≈ 0,85 m)") as st:
